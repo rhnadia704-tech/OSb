@@ -1,6 +1,6 @@
 {
-  "summary": "Plan for real deep EXT4/EROFS file tree extraction with odex/vdex analysis, persistent background TaskManager with live StateFlow, dynamic progress pill in Ubuntu Touch rail, floating mini-player progress card on desktop, and real-time streaming terminal logs.",
-  "updatedAt": "2026-10-15T11:58:50.531188341Z",
+  "summary": "Plan d'implémentation révisé — Architecture Dynamique et Universelle Sans Structure Figée :\n- Aucune arborescence ni liste de partitions codée en dur : détection et extraction 100% dynamique de n'importe quel conteneur (GSI single-partition, System-as-Root, super.img multi-partitions dynamiques, payload.bin A/B, archives .zip recovery dat.br, fastboot TGZ/tar, etc.).\n- Parcours universel de systèmes de fichiers (EXT4, EROFS, F2FS, Sparse Android) explorant l'arborescence réelle exacte telle qu'elle est codée dans les inodes et blocs de répertoires sans présumer de dossiers system/app/priv-app.\n- Moteur dynamique de partitions : détection automatique de toutes les partitions présentes (system, vendor, product, odm, cust, mi_ext, boot, vbmeta, ou partitions OEM personnalisées) avec extraction dans un espace dédié par partition.\n- Gestionnaire de liens symboliques (symlinks) universel sans perte : capture tous les symlinks rencontrés (relatifs, absolus, inter-partitions, multi-niveaux) dans symlinks.json/txt et création sécurisée (hybride natif + descripteur).\n- Repacker universel dynamique : réassemble n'importe quelle partition ou conteneur en respectant scrupuleusement la géométrie, l'arborescence exacte découverte et les métadonnées (taille 1:1, UUID, file_contexts, fs_config) sans limite de taille.",
+  "updatedAt": "2026-10-15T14:00:15.953262342Z",
   "requestFeedback": true,
   "userFacing": true
 }

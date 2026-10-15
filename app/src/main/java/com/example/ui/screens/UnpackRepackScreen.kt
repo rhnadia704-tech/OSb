@@ -114,6 +114,9 @@ fun UnpackRepackScreen(
     var availableProjects by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedProjectForRepack by remember { mutableStateOf(initialRepackProject ?: "") }
     var repackManifest by remember { mutableStateOf<ProjectMetadata?>(null) }
+    var selectedRepackFormat by remember { mutableStateOf(com.example.core.tools.kitchen.RepackOutputFormat.RAW_ORIGINAL_SIZE) }
+    var projectSymlinks by remember { mutableStateOf<List<com.example.core.tools.kitchen.SymlinkEntry>>(emptyList()) }
+    var showSymlinksDialog by remember { mutableStateOf(false) }
 
     fun refreshProjects() {
         val unpackDir = WorkspaceManager.getUnpackDir(context)
@@ -124,6 +127,8 @@ fun UnpackRepackScreen(
         }
         if (selectedProjectForRepack.isNotEmpty()) {
             repackManifest = WorkspaceDataHub.loadProjectManifest(context, selectedProjectForRepack)
+            val projectDataDir = com.example.core.tools.kitchen.KitchenMetadataManager.getProjectDataDir(context, selectedProjectForRepack)
+            projectSymlinks = com.example.core.tools.kitchen.SymlinkEngine.loadSymlinks(projectDataDir)
         }
     }
 
@@ -411,6 +416,8 @@ fun UnpackRepackScreen(
                                                 onClick = {
                                                     selectedProjectForRepack = proj
                                                     repackManifest = WorkspaceDataHub.loadProjectManifest(context, proj)
+                                                    val projectDataDir = com.example.core.tools.kitchen.KitchenMetadataManager.getProjectDataDir(context, proj)
+                                                    projectSymlinks = com.example.core.tools.kitchen.SymlinkEngine.loadSymlinks(projectDataDir)
                                                     expanded = false
                                                 }
                                             )
@@ -431,16 +438,119 @@ fun UnpackRepackScreen(
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(
-                                    text = "Spécifications d'Origine (Manifeste Verrouillé)",
+                                    text = "Spécifications d'Origine (Android Kitchen Manifest)",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text("Format source : ${repackManifest!!.imageType}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                                 Text("Sparse Mode : ${if (repackManifest!!.isSparse) "Actif (simg2img)" else "Désactivé (Raw)"}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                                Text("Taille d'origine : ${formatBytes(repackManifest!!.originalSizeBytes)}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                                Text("Taille d'origine : ${formatBytes(repackManifest!!.originalSizeBytes)}", fontFamily = FontFamily.Monospace, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                 Text("Dernier déballage : ${repackManifest!!.unpackDate}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                                if (repackManifest!!.partitions.isNotEmpty()) {
+                                    Text("Partitions : ${repackManifest!!.partitions.joinToString(", ")}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
                                 Text("Destination finale : /sdcard/BUILD/PACKED/${repackManifest!!.projectName}_repacked.img", fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+
+                    // Symlinks Inspector Card
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "Liens Symboliques (Symlinks Engine)",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "${projectSymlinks.size} liens symboliques sauvegardés (Zero-Loss)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF10B981)
+                                        )
+                                    }
+                                    if (projectSymlinks.isNotEmpty()) {
+                                        OutlinedButton(
+                                            onClick = { showSymlinksDialog = true },
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Inspecter (${projectSymlinks.size})", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+
+                                if (projectSymlinks.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Aperçu : ${projectSymlinks.take(3).joinToString(" | ") { "${it.path} -> ${it.target}" }}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Format Selector Card
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "Format d'Image Finale",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selectedRepackFormat == com.example.core.tools.kitchen.RepackOutputFormat.RAW_ORIGINAL_SIZE) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                        .clickable { selectedRepackFormat = com.example.core.tools.kitchen.RepackOutputFormat.RAW_ORIGINAL_SIZE }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("1:1 RAW Conforme (Taille originale exacte : ${formatBytes(repackManifest!!.originalSizeBytes)})", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        Text("Recréation bit-à-bit fidèle sans limite 32 Mo, géométrie originale respectée.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selectedRepackFormat == com.example.core.tools.kitchen.RepackOutputFormat.SPARSE_FASTBOOT) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                        .clickable { selectedRepackFormat = com.example.core.tools.kitchen.RepackOutputFormat.SPARSE_FASTBOOT }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("Sparse Android Image (Prêt pour Flash Fastboot)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        Text("Compression simg2img optimisée pour le flash rapide sur partition physique.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                             }
                         }
                     }
@@ -459,7 +569,8 @@ fun UnpackRepackScreen(
                                     if (selectedProjectForRepack.isNotBlank()) {
                                         TaskManager.startRepack(
                                             context = context,
-                                            projectName = selectedProjectForRepack
+                                            projectName = selectedProjectForRepack,
+                                            outputFormat = selectedRepackFormat
                                         )
                                     }
                                 },
@@ -472,13 +583,57 @@ fun UnpackRepackScreen(
                             ) {
                                 Icon(Icons.Default.Archive, contentDescription = "Lancer Repack")
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("REPACKER L'IMAGE", fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (selectedRepackFormat == com.example.core.tools.kitchen.RepackOutputFormat.RAW_ORIGINAL_SIZE) "REPACKER L'IMAGE (1:1 RAW)" else "REPACKER EN SPARSE FASTBOOT",
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    // Dialog d'inspection des Symlinks
+    if (showSymlinksDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showSymlinksDialog = false },
+            title = {
+                Text("Inspecteur de Liens Symboliques (${projectSymlinks.size})", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                LazyColumn(modifier = Modifier.height(350.dp)) {
+                    items(projectSymlinks) { sym ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = sym.path,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "-> ${sym.target}",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showSymlinksDialog = false }) {
+                    Text("Fermer")
+                }
+            }
+        )
     }
 }
 

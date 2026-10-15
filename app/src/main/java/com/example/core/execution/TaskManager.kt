@@ -113,7 +113,11 @@ object TaskManager {
         }
     }
 
-    fun startRepack(context: Context, projectName: String) {
+    fun startRepack(
+        context: Context,
+        projectName: String,
+        outputFormat: com.example.core.tools.kitchen.RepackOutputFormat = com.example.core.tools.kitchen.RepackOutputFormat.RAW_ORIGINAL_SIZE
+    ) {
         if (_activeTask.value?.isRunning == true) {
             ProcessTerminal.log(LogLevel.WARN, "Une tâche est déjà en cours d'exécution.")
             return
@@ -128,7 +132,7 @@ object TaskManager {
             type = TaskType.REPACK,
             projectName = projectName,
             sourceName = projectName,
-            recentLogs = listOf("Initialisation du réassemblage de $projectName...")
+            recentLogs = listOf("Initialisation du réassemblage de $projectName (${outputFormat.name})...")
         )
         _activeTask.value = initialTask
 
@@ -137,6 +141,7 @@ object TaskManager {
                 val outputFile = ImageToolchain.executeDeepRepack(
                     context = context,
                     projectName = projectName,
+                    outputFormat = outputFormat,
                     onProgress = { progress, stage, speedMBs, processedBytes ->
                         updateProgress(
                             progress = progress,
