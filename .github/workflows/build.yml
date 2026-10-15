@@ -22,24 +22,33 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Make Gradle Wrapper Executable
+      - name: Prepare Build Environment Secrets & Keystore
         run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x gradlew
+          # Create .env from template if absent
+          if [ ! -f ".env" ]; then
+            cp .env.example .env || touch .env
           fi
+
+          # Create standard Android debug keystore if absent (required by app/build.gradle.kts signingConfigs)
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant Execute Permission to Gradlew
+        run: chmod +x gradlew
 
       - name: Build Debug APK
-        run: |
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --stacktrace
-          else
-            gradle assembleDebug --stacktrace
-          fi
+        env:
+          GRADLE_OPTS: "-Xmx3072m -Dfile.encoding=UTF-8"
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
 
-      - name: Upload Debug APK
+      - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: OSbuilder-debug
