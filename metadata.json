@@ -1,0 +1,6 @@
+{
+  "name": "OSbuilder",
+  "description": "Mini-OS & Station modulaire de portage de ROMs avec unpack/repack multi-format, gestionnaire de fichiers MT/ZArchiver et console.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

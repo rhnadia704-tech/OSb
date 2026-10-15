@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="2"
+        android:translateY="2">
+        <!-- Top blue accent swoop of the O/S mark -->
+        <path
+            android:fillColor="#0B57D0"
+            android:pathData="M31,34 C31,27 36,22 46,22 L65,22 C67,22 69,23.5 69,26 L69,33 C69,33 50,33 46,35 C38,39 33,48 31,58 L31,34 Z" />
+
+        <!-- Blue curve highlight -->
+        <path
+            android:fillColor="#0842A0"
+            android:pathData="M31,38 C31,31 35,25 45,24 L65,24 C67,24 68,25 68,27 L68,32 C58,32 46,34 40,40 C35,46 32,54 31,61 Z" />
+
+        <!-- S upper curve (dark charcoal) -->
+        <path
+            android:fillColor="#212124"
+            android:pathData="M48,34 C58,34 68,37 68,46 C68,54 60,57 52,60 C42,63 36,65 36,73 C36,81 44,85 53,85 C61,85 67,81 70,76 L70,84 C66,88 59,91 51,91 C38,91 29,83 29,71 C29,61 37,56 46,53 C56,50 61,48 61,42 C61,37 56,33 48,33 C41,33 35,36 32,40 L31,34 C35,29 41,34 48,34 Z" />
+
+        <!-- b vertical stem -->
+        <path
+            android:fillColor="#212124"
+            android:pathData="M69,24 L77,24 L77,88 L69,88 Z" />
+
+        <!-- b circular bowl -->
+        <path
+            android:fillColor="#212124"
+            android:pathData="M77,54 C84,54 90,60 90,69 C90,78 84,84 77,84 C70,84 64,78 64,69 C64,60 70,54 77,54 Z M77,61 C72.5,61 69.5,64.5 69.5,69 C69.5,73.5 72.5,77 77,77 C81.5,77 84.5,73.5 84.5,69 C84.5,64.5 81.5,61 77,61 Z" />
+    </group>
+</vector>
