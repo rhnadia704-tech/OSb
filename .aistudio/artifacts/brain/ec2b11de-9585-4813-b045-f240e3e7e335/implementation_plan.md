@@ -1,159 +1,141 @@
-# OSbuilder — Moteur Android ROM Kitchen Universel & Dynamique Sans Format Ni Arborescence Figée
+# OSbuilder — Stratégie d'Unpack & Repack Intelligente inspirée de blackeangel/UKA
 
-Ce plan révise l'architecture pour répondre à l'exigence fondamentale : **aucune structure, arborescence, nom de dossier ou liste de partitions n'est prédéterminée ou codée en dur**. 
+## 1. Analyse approfondie du fonctionnement de blackeangel/UKA
 
-L'outil devient un **moteur d'inspection et d'extraction dynamique universel**, capable d'analyser n'importe quel fichier de ROM ou GSI (des cas les plus standards aux plus exotiques et complexes), d'en cartographier l'arborescence réelle exacte au niveau des blocs et inodes, et de la reconstituer au repack avec une fidélité de 100%.
+L'analyse du dépôt GitHub [blackeangel/UKA](https://github.com/blackeangel/UKA) (Unpacker Kitchen for Android) met en évidence l'architecture éprouvée des "kitchens" Android professionnelles :
 
----
+### A. Chaîne de décompression et identification automatique des formats
+UKA traite les firmwares Android en couches successives sans supposer de structure figée :
+1. **Conteneurs de ROM globaux** : Détection des archives ZIP (Recovery ROM, Fastboot ROM), extraction automatique des fichiers cibles.
+2. **Payload OTA A/B (`payload.bin`)** : Détection du magic `CrAU`, lecture des métadonnées de partitions et extraction des sous-images de partitions (`system.img`, `vendor.img`, `product.img`, `system_ext.img`, `odm.img`, `boot.img`).
+3. **Super Partition (`super.img`)** : Détection du header Android Dynamic Partitions (magic `g_sla` / `0x616C7367`), extraction des partitions logiques.
+4. **Sparse Android Images (`simg`)** : Détection du magic `0xED26FF3A`, conversion automatique en image raw continue (simg2img).
+5. **Blocs compressés OTA (`system.new.dat.br` / `.new.dat`)** : Décompression Brotli puis reconstruction de l'image brute via le fichier de commande `transfer.list` (`sdat2img`).
+6. **Images brutes EXT4 & EROFS** : Montage ou parsing direct de la structure de blocs pour extraire l'arborescence exacte sans interprétation arbitraire des données binaires.
+7. **Noyaux et ramdisks (`boot.img`, `recovery.img`)** : Détection du magic `ANDROID!` ou boot v3/v4, séparation kernel / ramdisk / dtb / cmdline.
 
-## 1. Principes Directeurs de l'Architecture Universelle
+### B. Sauvegarde des métadonnées système (`fs_config` & `file_contexts`)
+UKA ne se contente pas d'extraire des fichiers sur le disque :
+* **`fs_config`** : Consigne pour chaque élément son chemin relatif, UID, GID, permissions POSIX (ex: `0755`), cibles de liens symboliques (symlinks) et Linux capabilities.
+  * Exemple standard UKA :
+    ```text
+    system 0 0 755
+    system/bin 0 2000 755
+    system/bin/sh 0 2000 755
+    system/bin/app_process32 0 2000 755 app_process
+    ```
+* **`file_contexts`** : Sauvegarde des étiquettes SELinux exactes pour chaque fichier et dossier (ex: `/system(/.*)? u:object_r:system_file:s0`).
+* **`config.prop` / `image_info.json`** : Enregistre la taille exacte, la taille de bloc (4096), le nombre d'inodes, l'UUID du système de fichiers, le type original (sparse, raw ext4, erofs, dat.br).
 
-### A. Zéro Arborescence Préconçue (Dynamic Tree Traversal)
-- **Le problème précédent** : Pré-générer des dossiers conventionnels (`app/`, `priv-app/`, `framework/`, `lib/`, etc.) ou forcer un dossier unique `system/`.
-- **La nouvelle approche dynamique** :
-  - Le moteur ne présuppose **aucun nom de dossier ni hiérarchie**.
-  - Il parcourt directement la table des répertoires de l'image (entrées de répertoires EXT4 `ext4_dir_entry_2`, EROFS directory blocks, ou entrées d'archives).
-  - Chaque nœud (dossier, sous-dossier, fichier binaire, lien symbolique, socket, fifo, device node) est découvert dynamiquement et reproduit fidèlement dans l'arborescence du projet, quel que soit le niveau d'imbrication ou les noms de répertoires personnalisés par les constructeurs (OEMs).
-
-### B. Découverte Dynamique de Partitions Multiples (Partition Auto-Discovery)
-Une ROM ou un GSI complexe peut être :
-1. **Une GSI / Partition Unique** : EXT4 ou EROFS brut ou Sparse, avec ou sans System-as-Root (`system_root/system` ou racine directe `/`).
-2. **Une Image Dynamique `super.img`** : Contenant des dizaines de partitions logiques dynamiques nommées librement par les constructeurs (`system`, `vendor`, `product`, `system_ext`, `odm`, `cust`, `prism`, `optics`, `mi_ext`, `carrier`, `oem`, `factory`, etc.).
-3. **Une Archive OTA `payload.bin` (Android A/B)** : Définissant dynamiquement la liste de ses partitions dans son manifeste Protobuf/Delta (`boot`, `init_boot`, `vendor_boot`, `vbmeta`, `system`, `vendor`, `product`, etc.).
-4. **Une Archive Recovery Flashable `.zip`** : Contenant des paires dynamiques `*.new.dat.br` / `*.transfer.list` pour chaque partition présente.
-5. **Une Archive Fastboot / TGZ / TAR** : Contenant un ensemble d'images brutes ou sparse.
-
-**Comportement de l'outil** :
-- Le moteur cartographie dynamiquement **toutes les partitions découvertes** dans le conteneur.
-- Il crée un conteneur de projet avec un sous-dossier par partition réelle découverte : `BUILD/UNPACK/<projet>/partitions/<nom_partition>/` (ou racine directe pour une GSI single-image).
-- Chaque partition possède son profil d'intégrité dédié dans `BUILD/Data/projects/<projet>/partitions/<nom_partition>/`.
-
-### C. Gestion Stratégique et Universelle des Liens Symboliques (Symlinks)
-- **Aucune hypothèse sur les liens** : Découverte dynamique de tous les types de liens symboliques (`S_IFLNK`), sans liste blanche :
-  - Liens relatifs simples (`toybox`, `../../bin/app_process64`)
-  - Liens absolus (`/system/bin/sh`, `/vendor/lib64/lib...`)
-  - Liens inter-partitions complexes (`/system/vendor -> /vendor`, `/system/product -> /product`)
-- **Stockage sans perte** :
-  - Sauvegarde exhaustive dans `symlinks.json` et `symlinks.txt` (format Android Kitchen standard) pour chaque partition.
-  - Sauvegarde sur disque résiliente : tentative de lien POSIX natif + fichier descripteur `.symlink` transparent avec la cible si le système de fichiers hôte Android (FUSE) bloque la création directe.
-- **Reconstitution fidèle au Repack** :
-  - Restauration exacte des fast symlinks inline EXT4 (dans `i_data` si $\le 60$ octets) ou extents de données si plus long.
-  - Réapplication exacte des contextes SELinux (`file_contexts`) et droits (`fs_config`).
-
-### D. Repacker Intelligent Universel 1:1 (Sans Limite de Taille)
-- Élimination totale de la limitation à 32 Mo : lecture de la taille originale exacte depuis `original_info.json` (ex: 3.12 Go, 4.5 Go, etc.).
-- **Fidélité 1:1** :
-  - Si aucune modification n'a été effectuée : régénération d'une image bit-à-bit conforme (même géométrie, même superbloc, mêmes UUIDs, même hachage).
-  - Si des fichiers ont été modifiés/ajoutés/supprimés : recalcul dynamique de la table d'allocation et réinjection chirurgicale en respectant l'arborescence personnalisée et la taille globale de la partition.
-- Support du réassemblage en **Image RAW** ou **Sparse Fastboot** au choix de l'utilisateur.
+### C. Repackage 1:1 et reconstruction fidèle
+* **Si aucune modification n'est apportée** : UKA garantit une fidélité 100% avec l'originale (repack bit-à-bit parfait, hash SHA-256 identique).
+* **En cas de modification** : Reconstitution de l'image avec un système de fichiers intègre (ex: `make_ext4fs` ou `mke2fs` + `e2fsdroid` avec `-S file_contexts` et `-C fs_config`, ou `mkfs.erofs`), puis conversion optionnelle en sparse image (`img2simg`) ou format de mise à jour (`img2sdat`). Le fichier résultant est immédiatement lisible par ZArchiver, montable par le kernel Android et flashable par Fastboot/TWRP.
 
 ---
 
-## 2. Organisation Dynamique des Données
+## 2. Diagnostic des anomalies constatées lors de vos tests
 
-```
-📁 /storage/emulated/0/BUILD/
-├── 📁 Data/
-│     └── 📁 projects/<nom_projet>/
-│           ├── project_manifest.json    (Format conteneur, liste dynamique des partitions)
-│           ├── original_info.json       (Taille globale, hash SHA-256, format source)
-│           ├── report.txt               (Audit complet et log d'analyse)
-│           └── 📁 partitions/           (Une entrée par partition découverte)
-│                 └── 📁 <nom_partition>/ (ex: system, vendor, product, cust, etc.)
-│                       ├── partition_info.json  (Taille exacte, blocs, block_size, fs_type, UUID)
-│                       ├── symlinks.json        (Tous les symlinks découverts dans cette partition)
-│                       ├── symlinks.txt         (Format kitchen standard: symlink <target> <path>)
-│                       ├── fs_config            (UID, GID, permissions, capabilities réelles)
-│                       ├── file_contexts        (Contextes SELinux exacts découverts)
-│                       └── structure.json       (Arborescence complète et hashes de validation)
-│
-├── 📁 UNPACK/<nom_projet>/
-│     └── 📁 partitions/                 (Arborescence extraite 100% dynamique)
-│           └── 📁 <nom_partition>/      (Exemple: system/ ou vendor/ ou racine GSI)
-│                 └── ...                (Tous les fichiers et dossiers réels découverts)
-│
-└── 📁 PACKED/
-      └── <nom_projet>_repacked.img      (Image finale ou archive complète réassemblée)
-```
+1. **Extraction de faux dossiers (`anim`, `drawable`, `xml`...)** :
+   * **Cause exacte** : Dans `UniversalFsReader.kt`, le scan binaire heuristique cherchait des chaînes de caractères ASCII/UTF-8 arbitraires dans les blocs de l'image. Lorsqu'il traversait des APKs compilés du système (`framework-res.apk`, `SystemUI.apk`), il prenait les chemins internes de ressources Android (`res/anim/...`, `res/drawable/...`) pour des dossiers réels de l'image système et les créait à la racine !
+   * **Remède** : Supprimer ce scan heuristique défaillant et le remplacer par le véritable parcours structurel d'arborescence (Superblock -> Inode Table -> Inode 2 Root -> Directory Entries `ext4_dir_entry_2`).
+
+2. **Repack de 32 Mo semblant vide dans ZArchiver** :
+   * **Cause exacte** : Dans `UniversalRepacker.kt`, l'écriture concaténait les fichiers bout à bout avec des métadonnées fictives sans créer les véritables structures de données EXT4 attendues par ZArchiver (table d'inodes, bitmaps d'allocation des blocs et des inodes, extents `0xF30A`, entrées de répertoire `.` et `..` sur l'inode 2). ZArchiver ne trouvant pas la table des répertoires valide déclarait l'archive vide.
+   * **Remède** :
+     - Pour un repack sans modification : réémission 100% bit-exacte (hash SHA-256 identique).
+     - Pour un repack après modification : génération d'un conteneur EXT4 formel avec Superblock valide (`0xEF53`), Descripteurs de Groupes de Blocs 32/64 bits, Table d'Inodes réelle, Extents, et structures de répertoires standard lisibles nativement par ZArchiver et Linux.
 
 ---
 
-## 3. Plan d'Implémentation Technique
+## 3. Plan d'Implémentation Détaillé
 
-### Étape 1 : Moteur de Détection Multi-Conteneurs Universel (`UniversalContainerDetector.kt`)
-- Créer `com.example.core.tools.kitchen.UniversalContainerDetector` :
-  - Analyse de l'en-tête du fichier (Magic bytes) :
-    - `0xED26FF3A` : Android Sparse Image
-    - `0xEF53` à l'offset 1080 (0x438) : Système de fichiers EXT4 RAW
-    - `0xE0F5E1E2` : Système de fichiers EROFS
-    - `0xF2F52010` : Système de fichiers F2FS
-    - `0x616C0744` : Image dynamique `super.img` (Android Dynamic Partitions / LpMetadata)
-    - `0x43724155` (`CrAU`) : Archive Android OTA `payload.bin`
-    - `0x504B0304` (`PK..`) : Archive ZIP flashable Recovery
-    - `0x75737461` (`ustar`) : Archive TAR / TGZ Fastboot
-  - Extraction de la liste dynamique de partitions contenues sans a priori.
+### Étape 1 : Moteur intelligent de détection de formats multi-couches (`FormatDetector.kt`)
+* Reconnaissance automatique des signatures magiques :
+  - **Android Sparse** : `0xED26FF3A`
+  - **EXT4 Raw** : Magic `0xEF53` à l'offset `0x438` (Superblock standard)
+  - **EROFS Raw** : Magic `0xE0F5E1E2` à l'offset `0x400`
+  - **Payload.bin** : Magic `CrAU` (`0x43724155`)
+  - **Super Dynamic Partitions** : Magic `g_sla` (`0x616C7367`)
+  - **ROM Zip** : Signature PK (`0x504B0304`)
+  - **Brotli DAT** : Fichiers appariés `.new.dat` / `.new.dat.br` et `.transfer.list`
+  - **Android Boot/Recovery** : Magic `ANDROID!` (`0x414E44524F494421`)
+* Déroulement récursif : si une ROM zip contient un `payload.bin` ou un `super.img`, l'outil déballe d'abord le conteneur, puis analyse intelligemment chaque partition contenue.
 
-### Étape 2 : Parseur Dynamique de Système de Fichiers (`UniversalFsReader.kt`)
-- Créer `com.example.core.tools.kitchen.UniversalFsReader` :
-  - **Parcours dynamique d'inodes et répertoires EXT4** :
-    - Lecture du superbloc et des descripteurs de groupes de blocs (`ext4_group_desc`).
-    - Parcours récursif à partir de l'inode racine (`EXT4_ROOT_INO = 2`).
-    - Pour chaque entrée de répertoire (`ext4_dir_entry_2`) :
-      - Détection dynamique du type : `EXT4_FT_REG_FILE` (fichier), `EXT4_FT_DIR` (dossier), `EXT4_FT_SYMLINK` (lien symbolique), `EXT4_FT_CHRDEV`/`EXT4_FT_BLKDEV`/`EXT4_FT_FIFO`/`EXT4_FT_SOCK`.
-      - Aucune règle de filtrage ou de limitation par nom : tout nœud présent dans le filesystem est lu.
-  - **Extraction des données binaires réelles** :
-    - Parcours des extents d'arbre (`ext4_extent_header`, `ext4_extent_idx`, `ext4_extent`) pour extraire les blocs de données exacts de chaque fichier.
-  - **Décompression par blocs Sparse (`simg2img`)** :
-    - Gestion par flux évitant le dépassement de mémoire sur les gros fichiers de 3 à 8 Go.
+### Étape 2 : Création systématique des métadonnées dans `BUILD/data/` (`MetadataKeeper.kt`)
+Lors de chaque déballage, créer dans le dossier du projet `BUILD/data/` :
+* `image_info.json` :
+  - `original_filename`, `file_format`, `original_size_bytes`, `sha256_hash`
+  - `block_size` (ex: 4096), `total_blocks`, `inode_size` (ex: 256), `inodes_count`
+  - `volume_uuid`, `volume_name`, `feature_compat_flags`
+  - `is_modified` (false par défaut, passe à true si l'utilisateur modifie des fichiers)
+* `fs_config.txt` :
+  - Format identique à UKA et aux builds AOSP :
+    `[chemin_relatif] [uid] [gid] [mode_octal] [capabilities/symlink_target]`
+* `file_contexts` :
+  - Enregistrement des contextes SELinux extraits des xattrs (attributs étendus) ou du dictionnaire SELinux.
+* `symlinks.json` :
+  - Répertoire complet des liens symboliques (nom du lien -> cible relative ou absolue).
+* `original_image.bin` (ou référence d'accès direct sur le cache) :
+  - Sauvegarde intègre de l'image source pour assurer le repack 1:1 bit-à-bit parfait.
 
-### Étape 3 : Moteur Universel de Symlinks (`SymlinkEngine.kt`)
-- Créer `com.example.core.tools.kitchen.SymlinkEngine` :
-  - Extraction des Fast Symlinks EXT4 (cibles $\le 60$ octets stockées dans `i_block`/`i_data`) et des symlinks longs.
-  - Enregistrement immédiat dans `symlinks.json` et `symlinks.txt` de la partition concernée.
-  - Gestion sécurisée sur le stockage local :
-    - Tentative de création du symlink POSIX (`Files.createSymbolicLink`).
-    - Si l'environnement de stockage (FUSE) le refuse, création automatique d'un descripteur `.symlink` lisible contenant la chaîne cible.
-  - Vérificateur d'intégrité : validation des cibles relatives et absolues.
+### Étape 3 : Parseur structurel EXT4 & EROFS sans faux positifs (`Ext4StructuralParser.kt`)
+* Lecture rigoureuse des structures réelles :
+  1. **Superblock** : Extraction de `s_inodes_per_group`, `s_blocks_per_group`, `s_desc_size` (gestion 32-bit et 64-bit EXT4), `s_first_data_block`.
+  2. **Block Group Descriptors** : Calcul des adresses de la table d'inodes (`bg_inode_table_lo` / `bg_inode_table_hi`).
+  3. **Traversée d'arborescence à partir de l'Inode 2 (Root)** :
+     - Lecture de la structure `ext4_inode` (mode, uid, taille, flags).
+     - Résolution des blocs via le Header d'Extents (`0xF30A` / `ext4_extent_header`, `ext4_extent_idx`, `ext4_extent`).
+     - Décodage des entrées de répertoire (`ext4_dir_entry_2` : inode, rec_len, name_len, file_type, name).
+     - Parcours récursif des sous-répertoires réels.
+     - Prise en charge des symlinks inodaux (fast symlinks stockés directement dans `i_block` si taille < 60 octets) et symlinks par extents.
+* **Résultat garanti** : Aucun faux dossier `anim`, `drawable` ou `xml` car l'extraction suit exclusivement les pointeurs de la table d'inodes du système de fichiers.
 
-### Étape 4 : Gestionnaire Central de Métadonnées (`KitchenMetadataManager.kt`)
-- Enregistrement dynamique pour chaque partition :
-  - `partition_info.json` : taille exacte en octets, nombre total de blocs, taille de bloc, type de système de fichiers, UUID, label de volume.
-  - `fs_config` : cartographie de chaque chemin avec UID, GID, mode octal et capabilities.
-  - `file_contexts` : contextes SELinux exacts associés à chaque nœud.
-  - `structure.json` : empreinte de chaque fichier extrait.
+### Étape 4 : Repacker intelligent 100% conforme ZArchiver (`UniversalRepacker.kt`)
+* **Mode 1 : Repack 1:1 Sans Modification (Zéro altération)** :
+  - Vérification de l'intégrité via `image_info.json`.
+  - Si aucune modification n'a été apportée aux fichiers extraits, réémission immédiate de l'image originale exacte avec le hash SHA-256 d'origine.
+  - Résultat 100% garanti lisible dans ZArchiver et identique à l'octet près.
+* **Mode 2 : Repack Structurel EXT4 (En cas de modification)** :
+  - Calcul de la taille de partition requise (ou conservation de la taille originale définie dans `image_info.json`).
+  - Écriture d'un véritable système de fichiers EXT4 :
+    - Bloc 0 réservé (boot code).
+    - Superblock à l'offset 1024 (`0x400`) avec les champs obligatoires (`0xEF53`, révisions, blocs libres, inodes libres, montage propre `0x0001`).
+    - Descripteurs de groupes de blocs (Group Descriptors).
+    - Bitmaps d'allocation de blocs et d'inodes.
+    - Table d'Inodes pré-initialisée avec l'Inode 2 (répertoire racine `/`) contenant ses entrées `.` et `..`.
+    - Inodes pour chaque sous-répertoire et fichier avec extents (`0xF30A`) pointant vers les blocs de données réels.
+    - Inodes de type symlink (`0xA000` | permissions) avec leurs cibles exactes.
+    - Application des permissions et UID/GID issus de `BUILD/data/fs_config.txt`.
+  - Si le format original était un Android Sparse (`simg`), conversion du raw EXT4 produit au format Sparse via `img2simg` interne.
+* **Validation dans ZArchiver** : L'archive s'ouvre directement avec l'arborescence complète et tous ses fichiers consultables et extractibles sans aucune erreur.
 
-### Étape 5 : Repacker Intelligent Dynamique Haute Fidélité (`UniversalRepacker.kt`)
-- Créer `com.example.core.tools.kitchen.UniversalRepacker` :
-  - Prise en charge de n'importe quel projet déballé sans prérequis de nommage.
-  - **Mode 1:1 sans modification** :
-    - Reconstitution rigoureuse avec la taille exacte originale (ex: 3.12 Go), le même superbloc, les mêmes métadonnées et la même disposition.
-  - **Mode avec modifications** :
-    - Calcul du différentiel des fichiers modifiés dans l'arborescence dynamique.
-    - Réinjection avec recalcul des extents, application des permissions depuis `fs_config` et `file_contexts`.
-    - Restauration rigoureuse de tous les symlinks répertoriés dans `symlinks.json`.
-    - Maintien strict de la géométrie de partition originale.
-  - Support du format de sortie RAW ou Sparse.
-
-### Étape 6 : Intégration dans `ImageToolchain.kt`, `TaskManager.kt` et `UnpackRepackScreen.kt`
-- Connexion du nouveau pipeline universel à `ImageToolchain.kt`.
-- Affichage en temps réel dans `ProcessTerminal` :
-  - Nom du conteneur et partitions détectées dynamiquement.
-  - Progression en direct (fichiers extraits, symlinks enregistrés, vitesse en Mo/s).
-- Interface `UnpackRepackScreen` :
-  - Liste dynamique des partitions découvertes avec détails (taille, nombre de fichiers, nombre de symlinks).
-  - Inspecteur de symlinks permettant de visualiser tous les liens répertoriés.
-  - Sélecteur de mode de réassemblage (RAW 1:1 fidèle ou Sparse Fastboot).
+### Étape 5 : Interface UI intelligente avec statut d'intégrité et modes de repack
+* Affichage clair dans le tableau de bord OSbuilder :
+  - Format détecté avec badge (EXT4 Raw, Android Sparse, EROFS, Payload.bin, etc.).
+  - Statut des métadonnées `BUILD/data/` (fs_config sauvegardé, SELinux préservé, X liens symboliques indexés).
+  - Statut d'intégrité : `Original (1:1 Bit-Exact)` vs `Modifié`.
+  - Options de repack : `Repack 1:1 fidèle (Recommandé)` ou `Repack personnalisé (Format, Taille, Sparse)`.
 
 ---
 
-## 4. Vérification et Validation
+## 4. Fichiers touchés et créés
 
-1. **Test GSI / ROM Simple ou Complexe (ex: 3.12 Go)** :
-   - Détection automatique du format sans aucune saisie préalable.
-   - Extraction de la totalité de l'arborescence réelle sans omission.
-   - Tous les liens symboliques (binaires `sh`, liens `vendor`, bibliothèques) répertoriés dans `symlinks.json`/`symlinks.txt`.
-2. **Test du Réassemblage** :
-   - Génération d'une image dont la taille est exactement conforme (3.12 Go, et non 32 Mo).
-   - Intégrité vérifiée et compatibilité Fastboot préservée.
-3. **Compilation du Projet** :
-   - Exécution de `compile_applet` sans aucune régression.
+* `app/src/main/java/com/example/core/tools/kitchen/FormatDetector.kt` : Détection multi-formats intelligente.
+* `app/src/main/java/com/example/core/tools/kitchen/Ext4StructuralParser.kt` : Parseur structurel officiel EXT4 (Superblock, Group Descriptors, Inode Tables, Extents, Directory Entries, Symlinks).
+* `app/src/main/java/com/example/core/tools/kitchen/MetadataKeeper.kt` : Gestionnaire de sauvegarde/restauration de `fs_config`, `file_contexts` et `image_info.json` dans `BUILD/data/`.
+* `app/src/main/java/com/example/core/tools/kitchen/UniversalRepacker.kt` : Moteur de repack 1:1 bit-exact et reconstructeur de filesystem EXT4/Sparse conforme ZArchiver.
+* `app/src/main/java/com/example/core/tools/ImageToolchain.kt` : Orchestration complète du pipeline Unpack -> Indexation Métadonnées -> Modifications -> Repack.
+* `app/src/main/java/com/example/presentation/screens/WorkspaceScreen.kt` & `ProjectDetailScreen.kt` : Affichage de l'état des métadonnées UKA et des options de repack.
+
+---
+
+## 5. Critères de validation et de succès
+
+1. **Unpack propre sans faux dossiers** :
+   - L'extraction d'une image Android extrait rigoureusement l'arborescence réelle (`bin`, `etc`, `lib`, `framework`, `app`, etc.) sans jamais générer de dossiers artificiels `anim`, `drawable`, `xml` à la racine.
+2. **Métadonnées enregistrées dans `BUILD/data/`** :
+   - Présence effective de `fs_config.txt`, `file_contexts` et `image_info.json`.
+3. **Compatibilité ZArchiver & Outils standards** :
+   - L'image repaquée s'ouvre instantanément dans ZArchiver, affichant l'arborescence complète et le contenu exact de chaque fichier.
+4. **Fidélité 100% en l'absence de modification** :
+   - Un repack immédiat sans modification produit un fichier strictement identique à l'original (vérifié par SHA-256).

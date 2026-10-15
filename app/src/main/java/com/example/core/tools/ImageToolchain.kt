@@ -149,7 +149,7 @@ object ImageToolchain {
                 )
             }
 
-            // 3. Sauvegarder le descripteur global du projet (original_info.json, project_manifest.json, report.txt)
+            // 3. Sauvegarder le descripteur global du projet (original_info.json, image_info.json, report.txt)
             val projectDescriptor = KitchenProjectDescriptor(
                 projectName = projectName,
                 sourceFileName = inputFile.name,
@@ -159,6 +159,7 @@ object ImageToolchain {
                 sha256 = sha256,
                 md5 = md5,
                 unpackDate = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                originalSourcePath = inputFile.absolutePath,
                 partitions = partitionManifests
             )
             KitchenMetadataManager.saveProjectDescriptor(context, projectDescriptor)

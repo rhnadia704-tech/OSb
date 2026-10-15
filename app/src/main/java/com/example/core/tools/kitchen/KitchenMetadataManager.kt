@@ -5,6 +5,7 @@ import com.example.core.storage.WorkspaceManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -46,6 +47,7 @@ data class KitchenProjectDescriptor(
     val sha256: String,
     val md5: String,
     val unpackDate: String,
+    val originalSourcePath: String? = null,
     val partitions: List<PartitionManifest>
 )
 
@@ -72,11 +74,29 @@ object KitchenMetadataManager {
             put("sha256", descriptor.sha256)
             put("md5", descriptor.md5)
             put("unpackDate", descriptor.unpackDate)
+            if (descriptor.originalSourcePath != null) {
+                put("originalSourcePath", descriptor.originalSourcePath)
+            }
             put("partitionsCount", descriptor.partitions.size)
         }
         File(projectDir, "original_info.json").writeText(originalInfoJson.toString(2))
 
-        // 2. project_manifest.json
+        // 2. image_info.json (Format spécifique kitchen pour le repacker)
+        val imageInfoJson = JSONObject().apply {
+            put("projectName", descriptor.projectName)
+            put("sourceFileName", descriptor.sourceFileName)
+            put("containerFormat", descriptor.containerFormat)
+            put("originalSizeBytes", descriptor.sourceSizeBytes)
+            put("isSparse", descriptor.isSparse)
+            put("sha256", descriptor.sha256)
+            put("md5", descriptor.md5)
+            put("unpackDate", descriptor.unpackDate)
+            put("originalSourcePath", descriptor.originalSourcePath ?: "")
+            put("isModified", false)
+        }
+        File(projectDir, "image_info.json").writeText(imageInfoJson.toString(2))
+
+        // 3. project_manifest.json
         val manifestJson = JSONObject().apply {
             put("projectName", descriptor.projectName)
             put("sourceFileName", descriptor.sourceFileName)
@@ -85,6 +105,7 @@ object KitchenMetadataManager {
             put("isSparse", descriptor.isSparse)
             put("sha256", descriptor.sha256)
             put("unpackDate", descriptor.unpackDate)
+            put("originalSourcePath", descriptor.originalSourcePath ?: "")
 
             val partArray = JSONArray()
             descriptor.partitions.forEach { p ->
@@ -107,7 +128,7 @@ object KitchenMetadataManager {
         }
         File(projectDir, "project_manifest.json").writeText(manifestJson.toString(2))
 
-        // 3. report.txt (Comprehensive readable report for the user)
+        // 4. report.txt (Comprehensive readable report for the user)
         val reportFile = File(projectDir, "report.txt")
         val reportContent = buildString {
             appendLine("=== OSBUILDER ANDROID KITCHEN PROJECT MANIFEST ===")
@@ -119,6 +140,7 @@ object KitchenMetadataManager {
             appendLine("SHA-256: ${descriptor.sha256}")
             appendLine("MD5: ${descriptor.md5}")
             appendLine("Unpack Date: ${descriptor.unpackDate}")
+            appendLine("Original Source Cached: ${descriptor.originalSourcePath ?: "N/A"}")
             appendLine("Discovered Partitions (${descriptor.partitions.size}):")
             descriptor.partitions.forEach { p ->
                 appendLine("  [Partition: ${p.partitionName}]")
@@ -141,6 +163,7 @@ object KitchenMetadataManager {
         symlinks: List<SymlinkEntry>
     ) {
         val partDir = getPartitionDataDir(context, projectName, manifest.partitionName)
+        val projDir = getProjectDataDir(context, projectName)
 
         // 1. partition_info.json
         val pJson = JSONObject().apply {
@@ -177,18 +200,19 @@ object KitchenMetadataManager {
         }
         File(partDir, "structure.json").writeText(structureArray.toString(2))
 
-        // 3. fs_config (Android standard permissions table)
-        val fsConfigFile = File(partDir, "fs_config")
+        // 3. fs_config & fs_config.txt (Format standard AOSP & UKA)
         val fsConfigContent = buildString {
             appendLine("# path uid gid mode capabilities")
             nodes.sortedBy { it.relativePath }.forEach { n ->
                 appendLine("${n.relativePath} ${n.uid} ${n.gid} ${n.mode} 0x0")
             }
         }
-        fsConfigFile.writeText(fsConfigContent)
+        File(partDir, "fs_config").writeText(fsConfigContent)
+        File(partDir, "fs_config.txt").writeText(fsConfigContent)
+        // Également à la racine du projet Data pour accès direct
+        File(projDir, "fs_config.txt").writeText(fsConfigContent)
 
         // 4. file_contexts (SELinux context table)
-        val fileContextsFile = File(partDir, "file_contexts")
         val fileContextsContent = buildString {
             appendLine("# path selinux_context")
             nodes.sortedBy { it.relativePath }.forEach { n ->
@@ -196,20 +220,28 @@ object KitchenMetadataManager {
                 appendLine("$slashPath ${n.selinuxContext}")
             }
         }
-        fileContextsFile.writeText(fileContextsContent)
+        File(partDir, "file_contexts").writeText(fileContextsContent)
+        File(projDir, "file_contexts").writeText(fileContextsContent)
 
         // 5. symlinks.json and symlinks.txt
         SymlinkEngine.saveSymlinksManifest(partDir, symlinks)
+        SymlinkEngine.saveSymlinksManifest(projDir, symlinks)
     }
 
     fun loadProjectDescriptor(context: Context, projectName: String): KitchenProjectDescriptor? {
         val projectDir = getProjectDataDir(context, projectName)
         val origFile = File(projectDir, "original_info.json")
         val manifestFile = File(projectDir, "project_manifest.json")
-        if (!origFile.exists() && !manifestFile.exists()) return null
+        val imageInfoFile = File(projectDir, "image_info.json")
+        if (!origFile.exists() && !manifestFile.exists() && !imageInfoFile.exists()) return null
 
         try {
-            val json = JSONObject((if (manifestFile.exists()) manifestFile else origFile).readText())
+            val jsonSource = when {
+                imageInfoFile.exists() -> imageInfoFile
+                manifestFile.exists() -> manifestFile
+                else -> origFile
+            }
+            val json = JSONObject(jsonSource.readText())
             val partsJson = json.optJSONArray("partitions")
             val partitionList = mutableListOf<PartitionManifest>()
 
@@ -220,7 +252,7 @@ object KitchenMetadataManager {
                         PartitionManifest(
                             partitionName = p.optString("name", "system"),
                             fsType = p.optString("fsType", "EXT4"),
-                            originalSizeBytes = p.optLong("sizeBytes", json.optLong("sourceSizeBytes", 0L)),
+                            originalSizeBytes = p.optLong("sizeBytes", json.optLong("sourceSizeBytes", json.optLong("originalSizeBytes", 0L))),
                             blockCount = p.optLong("blockCount", 0L),
                             blockSize = p.optInt("blockSize", 4096),
                             isSparse = p.optBoolean("isSparse", json.optBoolean("isSparse", false)),
@@ -233,12 +265,11 @@ object KitchenMetadataManager {
                     )
                 }
             } else {
-                // Single default partition
                 partitionList.add(
                     PartitionManifest(
                         partitionName = "system",
                         fsType = json.optString("containerFormat", "EXT4"),
-                        originalSizeBytes = json.optLong("sourceSizeBytes", 0L),
+                        originalSizeBytes = json.optLong("sourceSizeBytes", json.optLong("originalSizeBytes", 0L)),
                         blockCount = 0L,
                         blockSize = 4096,
                         isSparse = json.optBoolean("isSparse", false),
@@ -254,16 +285,61 @@ object KitchenMetadataManager {
             return KitchenProjectDescriptor(
                 projectName = json.optString("projectName", projectName),
                 sourceFileName = json.optString("sourceFileName", ""),
-                sourceSizeBytes = json.optLong("sourceSizeBytes", 0L),
+                sourceSizeBytes = json.optLong("sourceSizeBytes", json.optLong("originalSizeBytes", 0L)),
                 containerFormat = json.optString("containerFormat", "RAW_EXT4"),
                 isSparse = json.optBoolean("isSparse", false),
                 sha256 = json.optString("sha256", ""),
                 md5 = json.optString("md5", ""),
                 unpackDate = json.optString("unpackDate", ""),
+                originalSourcePath = json.optString("originalSourcePath", null).takeIf { !it.isNullOrEmpty() },
                 partitions = partitionList
             )
         } catch (_: Exception) {
             return null
+        }
+    }
+
+    /**
+     * Vérifie si le projet déballé a été modifié par rapport à l'original.
+     * Si l'utilisateur n'a touché à rien, retourne false (garantit repack 1:1 bit-exact).
+     */
+    fun hasProjectBeenModified(context: Context, projectName: String): Boolean {
+        val unpackDir = File(WorkspaceManager.getUnpackDir(context), projectName)
+        val dataDir = getProjectDataDir(context, projectName)
+        val imageInfoFile = File(dataDir, "image_info.json")
+        if (!imageInfoFile.exists()) return true
+
+        try {
+            val json = JSONObject(imageInfoFile.readText())
+            if (json.optBoolean("isModified", false)) return true
+
+            // Si le marqueur d'écriture n'est pas posé, vérifier le nombre de fichiers
+            val structureFile = File(File(dataDir, "partitions/system"), "structure.json").takeIf { it.exists() }
+                ?: File(dataDir, "structure.json").takeIf { it.exists() }
+
+            if (structureFile != null) {
+                val array = JSONArray(structureFile.readText())
+                val recordedCount = array.length()
+                val currentFiles = unpackDir.walkTopDown().filter { !it.name.endsWith(".symlink") }.count() - 1 // -1 pour la racine
+                if (Math.abs(recordedCount - currentFiles) > 2) {
+                    return true
+                }
+            }
+            return false
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
+    fun markProjectAsModified(context: Context, projectName: String) {
+        val dataDir = getProjectDataDir(context, projectName)
+        val imageInfoFile = File(dataDir, "image_info.json")
+        if (imageInfoFile.exists()) {
+            try {
+                val json = JSONObject(imageInfoFile.readText())
+                json.put("isModified", true)
+                imageInfoFile.writeText(json.toString(2))
+            } catch (_: Exception) { }
         }
     }
 
