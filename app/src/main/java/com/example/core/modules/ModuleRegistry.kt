@@ -31,6 +31,13 @@ object ModuleRegistry {
             isSystem = true
         ),
         AppModule(
+            id = "extract",
+            title = "Extract & GSI",
+            description = "Extraction Live du matériel & Diagnostic intelligent GSI",
+            iconType = "extract",
+            isSystem = true
+        ),
+        AppModule(
             id = "console",
             title = "Console",
             description = "Terminal système haute vélocité et journal des opérations",

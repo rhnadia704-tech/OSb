@@ -1,141 +1,213 @@
-# OSbuilder — Stratégie d'Unpack & Repack Intelligente inspirée de blackeangel/UKA
+# Module EXTRACT & Diagnostic GSI Live
 
-## 1. Analyse approfondie du fonctionnement de blackeangel/UKA
+Système d'extraction en direct du matériel, des HALs, des vendor blobs et des configurations du téléphone hôte, couplé à un moteur d'inspection et de comparaison intelligente avec les projets GSI décompressés dans `BUILD/UNPACK/` pour auditer l'efficacité des patchs PHH/Treble et préparer un portage from scratch 100% compatible.
 
-L'analyse du dépôt GitHub [blackeangel/UKA](https://github.com/blackeangel/UKA) (Unpacker Kitchen for Android) met en évidence l'architecture éprouvée des "kitchens" Android professionnelles :
+## User Review & Critical Decisions
 
-### A. Chaîne de décompression et identification automatique des formats
-UKA traite les firmwares Android en couches successives sans supposer de structure figée :
-1. **Conteneurs de ROM globaux** : Détection des archives ZIP (Recovery ROM, Fastboot ROM), extraction automatique des fichiers cibles.
-2. **Payload OTA A/B (`payload.bin`)** : Détection du magic `CrAU`, lecture des métadonnées de partitions et extraction des sous-images de partitions (`system.img`, `vendor.img`, `product.img`, `system_ext.img`, `odm.img`, `boot.img`).
-3. **Super Partition (`super.img`)** : Détection du header Android Dynamic Partitions (magic `g_sla` / `0x616C7367`), extraction des partitions logiques.
-4. **Sparse Android Images (`simg`)** : Détection du magic `0xED26FF3A`, conversion automatique en image raw continue (simg2img).
-5. **Blocs compressés OTA (`system.new.dat.br` / `.new.dat`)** : Décompression Brotli puis reconstruction de l'image brute via le fichier de commande `transfer.list` (`sdat2img`).
-6. **Images brutes EXT4 & EROFS** : Montage ou parsing direct de la structure de blocs pour extraire l'arborescence exacte sans interprétation arbitraire des données binaires.
-7. **Noyaux et ramdisks (`boot.img`, `recovery.img`)** : Détection du magic `ANDROID!` ou boot v3/v4, séparation kernel / ramdisk / dtb / cmdline.
-
-### B. Sauvegarde des métadonnées système (`fs_config` & `file_contexts`)
-UKA ne se contente pas d'extraire des fichiers sur le disque :
-* **`fs_config`** : Consigne pour chaque élément son chemin relatif, UID, GID, permissions POSIX (ex: `0755`), cibles de liens symboliques (symlinks) et Linux capabilities.
-  * Exemple standard UKA :
-    ```text
-    system 0 0 755
-    system/bin 0 2000 755
-    system/bin/sh 0 2000 755
-    system/bin/app_process32 0 2000 755 app_process
-    ```
-* **`file_contexts`** : Sauvegarde des étiquettes SELinux exactes pour chaque fichier et dossier (ex: `/system(/.*)? u:object_r:system_file:s0`).
-* **`config.prop` / `image_info.json`** : Enregistre la taille exacte, la taille de bloc (4096), le nombre d'inodes, l'UUID du système de fichiers, le type original (sparse, raw ext4, erofs, dat.br).
-
-### C. Repackage 1:1 et reconstruction fidèle
-* **Si aucune modification n'est apportée** : UKA garantit une fidélité 100% avec l'originale (repack bit-à-bit parfait, hash SHA-256 identique).
-* **En cas de modification** : Reconstitution de l'image avec un système de fichiers intègre (ex: `make_ext4fs` ou `mke2fs` + `e2fsdroid` avec `-S file_contexts` et `-C fs_config`, ou `mkfs.erofs`), puis conversion optionnelle en sparse image (`img2simg`) ou format de mise à jour (`img2sdat`). Le fichier résultant est immédiatement lisible par ZArchiver, montable par le kernel Android et flashable par Fastboot/TWRP.
+> [!IMPORTANT]
+> **Décisions architecturales confirmées suite à vos instructions :**
+> - **Source GSI à inspecter** : Sélection directe parmi les projets déjà décompressés dans `BUILD/UNPACK/` via une liste déroulante dynamique. Aucune re-décompression requise.
+> - **Audit d'efficacité des patchs PHH / Treble** : Analyse approfondie des mécanismes du GSI (scripts `phh-on-boot.sh`, `rw-system.sh`, `init.phh.rc`, `phh-sepolicy`, overlays treble) et diagnostic précis de leurs angles morts vis-à-vis du vendor spécifique de l'appareil actuel (audio proprietary, VoLTE/IMS, camera provider, services init propriétaires MTK/Qualcomm/Exynos/Tensor).
+> - **Base de données de référence du téléphone hôte (Interopérabilité future)** :
+>   1. `filesystem_tree.json` : Arborescence intégrale de toutes les partitions (`/system`, `/vendor`, `/product`, `/odm`, `/apex`, `/system_ext`) avec permissions Linux, contextes SELinux, liens symboliques et empreintes.
+>   2. `critical_dependency_graph.json` : Graphe complet de dépendances (parsing ELF `DT_NEEDED` des `.so`, liaisons `linker`, VNDK namespaces et dépendances de services `init.*.rc`).
+>   3. `boot_security_trust_chain.json` : Mécanisme de signature, chaîne de confiance et sécurité de boot (AVB 2.0 / dm-verity, clés release-keys, drapeaux `verifiedbootstate`, `vbmeta`, Keymint/Keystore2/Gatekeeper/TEE).
+>   4. `hardware_database.json` : Base de données matérielle détaillée (SoC, GPU, Audio, Caméra, Capteurs, RIL/Modem, Biométrie, Écran/DSI cutouts).
+>   5. `porting_blueprint.json` & `gsi_diff_matrix.json` : Directives de portage et d'injection directement exploitables par les prochains outils de build sans ré-explication.
 
 ---
 
-## 2. Diagnostic des anomalies constatées lors de vos tests
+## 1. Overview & Core Concept
 
-1. **Extraction de faux dossiers (`anim`, `drawable`, `xml`...)** :
-   * **Cause exacte** : Dans `UniversalFsReader.kt`, le scan binaire heuristique cherchait des chaînes de caractères ASCII/UTF-8 arbitraires dans les blocs de l'image. Lorsqu'il traversait des APKs compilés du système (`framework-res.apk`, `SystemUI.apk`), il prenait les chemins internes de ressources Android (`res/anim/...`, `res/drawable/...`) pour des dossiers réels de l'image système et les créait à la racine !
-   * **Remède** : Supprimer ce scan heuristique défaillant et le remplacer par le véritable parcours structurel d'arborescence (Superblock -> Inode Table -> Inode 2 Root -> Directory Entries `ext4_dir_entry_2`).
+### What It Does
+Le module **EXTRACT** accomplit deux missions fondamentales :
+1. **Extraction Live & Base de Données Téléphone** :
+   - Récolte tous les fichiers physiques sans exception des partitions accessibles (`/vendor`, `/odm`, `/system/vendor`, `/apex`, `/system/etc`, configurations de démarrage, binaires et `.so`).
+   - Construit une base de connaissances exhaustive sur le téléphone actuel stockée dans `BUILD/EXTRACT/projects/<DeviceName>/` avec arborescence complète, graphe de dépendances et chaîne de confiance.
+2. **Diagnostic Comparatif GSI Unpacké & Évaluation des Patchs PHH** :
+   - Se connecte directement au dossier décompressé dans `BUILD/UNPACK/` choisi par l'utilisateur.
+   - Inspecte l'implémentation interne du GSI (scripts d'initialisation PHH, politiques SELinux Treble, daemons de compatibilité).
+   - Confronte les exigences du vendor hôte avec les capacités réelles du GSI unpacké afin de signaler avec certitude si les patchs PHH intégrés suffisent ou s'il faut générer des adaptateurs/shims sur-mesure.
 
-2. **Repack de 32 Mo semblant vide dans ZArchiver** :
-   * **Cause exacte** : Dans `UniversalRepacker.kt`, l'écriture concaténait les fichiers bout à bout avec des métadonnées fictives sans créer les véritables structures de données EXT4 attendues par ZArchiver (table d'inodes, bitmaps d'allocation des blocs et des inodes, extents `0xF30A`, entrées de répertoire `.` et `..` sur l'inode 2). ZArchiver ne trouvant pas la table des répertoires valide déclarait l'archive vide.
-   * **Remède** :
-     - Pour un repack sans modification : réémission 100% bit-exacte (hash SHA-256 identique).
-     - Pour un repack après modification : génération d'un conteneur EXT4 formel avec Superblock valide (`0xEF53`), Descripteurs de Groupes de Blocs 32/64 bits, Table d'Inodes réelle, Extents, et structures de répertoires standard lisibles nativement par ZArchiver et Linux.
+### Target Audience & Persona
+Développeurs de systèmes d'exploitation mobiles et créateurs de ROMs customs qui ont besoin d'une vue chirurgicale de leur matériel et d'une automatisation totale de l'intégration Vendor-GSI.
 
----
-
-## 3. Plan d'Implémentation Détaillé
-
-### Étape 1 : Moteur intelligent de détection de formats multi-couches (`FormatDetector.kt`)
-* Reconnaissance automatique des signatures magiques :
-  - **Android Sparse** : `0xED26FF3A`
-  - **EXT4 Raw** : Magic `0xEF53` à l'offset `0x438` (Superblock standard)
-  - **EROFS Raw** : Magic `0xE0F5E1E2` à l'offset `0x400`
-  - **Payload.bin** : Magic `CrAU` (`0x43724155`)
-  - **Super Dynamic Partitions** : Magic `g_sla` (`0x616C7367`)
-  - **ROM Zip** : Signature PK (`0x504B0304`)
-  - **Brotli DAT** : Fichiers appariés `.new.dat` / `.new.dat.br` et `.transfer.list`
-  - **Android Boot/Recovery** : Magic `ANDROID!` (`0x414E44524F494421`)
-* Déroulement récursif : si une ROM zip contient un `payload.bin` ou un `super.img`, l'outil déballe d'abord le conteneur, puis analyse intelligemment chaque partition contenue.
-
-### Étape 2 : Création systématique des métadonnées dans `BUILD/data/` (`MetadataKeeper.kt`)
-Lors de chaque déballage, créer dans le dossier du projet `BUILD/data/` :
-* `image_info.json` :
-  - `original_filename`, `file_format`, `original_size_bytes`, `sha256_hash`
-  - `block_size` (ex: 4096), `total_blocks`, `inode_size` (ex: 256), `inodes_count`
-  - `volume_uuid`, `volume_name`, `feature_compat_flags`
-  - `is_modified` (false par défaut, passe à true si l'utilisateur modifie des fichiers)
-* `fs_config.txt` :
-  - Format identique à UKA et aux builds AOSP :
-    `[chemin_relatif] [uid] [gid] [mode_octal] [capabilities/symlink_target]`
-* `file_contexts` :
-  - Enregistrement des contextes SELinux extraits des xattrs (attributs étendus) ou du dictionnaire SELinux.
-* `symlinks.json` :
-  - Répertoire complet des liens symboliques (nom du lien -> cible relative ou absolue).
-* `original_image.bin` (ou référence d'accès direct sur le cache) :
-  - Sauvegarde intègre de l'image source pour assurer le repack 1:1 bit-à-bit parfait.
-
-### Étape 3 : Parseur structurel EXT4 & EROFS sans faux positifs (`Ext4StructuralParser.kt`)
-* Lecture rigoureuse des structures réelles :
-  1. **Superblock** : Extraction de `s_inodes_per_group`, `s_blocks_per_group`, `s_desc_size` (gestion 32-bit et 64-bit EXT4), `s_first_data_block`.
-  2. **Block Group Descriptors** : Calcul des adresses de la table d'inodes (`bg_inode_table_lo` / `bg_inode_table_hi`).
-  3. **Traversée d'arborescence à partir de l'Inode 2 (Root)** :
-     - Lecture de la structure `ext4_inode` (mode, uid, taille, flags).
-     - Résolution des blocs via le Header d'Extents (`0xF30A` / `ext4_extent_header`, `ext4_extent_idx`, `ext4_extent`).
-     - Décodage des entrées de répertoire (`ext4_dir_entry_2` : inode, rec_len, name_len, file_type, name).
-     - Parcours récursif des sous-répertoires réels.
-     - Prise en charge des symlinks inodaux (fast symlinks stockés directement dans `i_block` si taille < 60 octets) et symlinks par extents.
-* **Résultat garanti** : Aucun faux dossier `anim`, `drawable` ou `xml` car l'extraction suit exclusivement les pointeurs de la table d'inodes du système de fichiers.
-
-### Étape 4 : Repacker intelligent 100% conforme ZArchiver (`UniversalRepacker.kt`)
-* **Mode 1 : Repack 1:1 Sans Modification (Zéro altération)** :
-  - Vérification de l'intégrité via `image_info.json`.
-  - Si aucune modification n'a été apportée aux fichiers extraits, réémission immédiate de l'image originale exacte avec le hash SHA-256 d'origine.
-  - Résultat 100% garanti lisible dans ZArchiver et identique à l'octet près.
-* **Mode 2 : Repack Structurel EXT4 (En cas de modification)** :
-  - Calcul de la taille de partition requise (ou conservation de la taille originale définie dans `image_info.json`).
-  - Écriture d'un véritable système de fichiers EXT4 :
-    - Bloc 0 réservé (boot code).
-    - Superblock à l'offset 1024 (`0x400`) avec les champs obligatoires (`0xEF53`, révisions, blocs libres, inodes libres, montage propre `0x0001`).
-    - Descripteurs de groupes de blocs (Group Descriptors).
-    - Bitmaps d'allocation de blocs et d'inodes.
-    - Table d'Inodes pré-initialisée avec l'Inode 2 (répertoire racine `/`) contenant ses entrées `.` et `..`.
-    - Inodes pour chaque sous-répertoire et fichier avec extents (`0xF30A`) pointant vers les blocs de données réels.
-    - Inodes de type symlink (`0xA000` | permissions) avec leurs cibles exactes.
-    - Application des permissions et UID/GID issus de `BUILD/data/fs_config.txt`.
-  - Si le format original était un Android Sparse (`simg`), conversion du raw EXT4 produit au format Sparse via `img2simg` interne.
-* **Validation dans ZArchiver** : L'archive s'ouvre directement avec l'arborescence complète et tous ses fichiers consultables et extractibles sans aucune erreur.
-
-### Étape 5 : Interface UI intelligente avec statut d'intégrité et modes de repack
-* Affichage clair dans le tableau de bord OSbuilder :
-  - Format détecté avec badge (EXT4 Raw, Android Sparse, EROFS, Payload.bin, etc.).
-  - Statut des métadonnées `BUILD/data/` (fs_config sauvegardé, SELinux préservé, X liens symboliques indexés).
-  - Statut d'intégrité : `Original (1:1 Bit-Exact)` vs `Modifié`.
-  - Options de repack : `Repack 1:1 fidèle (Recommandé)` ou `Repack personnalisé (Format, Taille, Sparse)`.
+### Key Value
+Fournit un socle de données pérenne et standardisé. Les outils futurs (Builder, Patcher, Flasher) pourront lire directement les fichiers JSON générés sans nécessiter de configuration manuelle.
 
 ---
 
-## 4. Fichiers touchés et créés
+## 2. User Experience & Visual Design
 
-* `app/src/main/java/com/example/core/tools/kitchen/FormatDetector.kt` : Détection multi-formats intelligente.
-* `app/src/main/java/com/example/core/tools/kitchen/Ext4StructuralParser.kt` : Parseur structurel officiel EXT4 (Superblock, Group Descriptors, Inode Tables, Extents, Directory Entries, Symlinks).
-* `app/src/main/java/com/example/core/tools/kitchen/MetadataKeeper.kt` : Gestionnaire de sauvegarde/restauration de `fs_config`, `file_contexts` et `image_info.json` dans `BUILD/data/`.
-* `app/src/main/java/com/example/core/tools/kitchen/UniversalRepacker.kt` : Moteur de repack 1:1 bit-exact et reconstructeur de filesystem EXT4/Sparse conforme ZArchiver.
-* `app/src/main/java/com/example/core/tools/ImageToolchain.kt` : Orchestration complète du pipeline Unpack -> Indexation Métadonnées -> Modifications -> Repack.
-* `app/src/main/java/com/example/presentation/screens/WorkspaceScreen.kt` & `ProjectDetailScreen.kt` : Affichage de l'état des métadonnées UKA et des options de repack.
+### Key User Flows
+
+1. **Lancement & Synthèse Hôte** :
+   - Clic sur l'icône **Extract** sur le bureau ou dans le lanceur.
+   - Une carte d'accueil affiche l'identité de l'appareil (Modèle, Chipset/Plateforme, Version Android, SPL, Statut Root/SELinux, ABI).
+
+2. **Sélection du Projet GSI Décompressé (`BUILD/UNPACK/`)** :
+   - Un menu déroulant (`ExposedDropdownMenuBox`) liste instantanément tous les sous-dossiers trouvés dans `BUILD/UNPACK/` (ex: `PixelExperience_arm64`, `LineageOS_21_td`, etc.).
+   - Possibilité de rafraîchir la liste ou d'ouvrir le dossier sélectionné dans le gestionnaire de fichiers.
+
+3. **Lancement de l'Extraction & Analyse Croisée** :
+   - Bouton d'action principal : **"Lancer l'Extraction Complète & Diagnostic GSI"**.
+   - Affichage d'un panneau de statut dynamique avec indicateur d'avancement et terminal en direct :
+     * **Étape 1** : Cartographie arborescente du téléphone hôte & capture des métadonnées (`filesystem_tree.json`).
+     * **Étape 2** : Analyse de la chaîne de confiance et de signature de boot (`boot_security_trust_chain.json`).
+     * **Étape 3** : Extraction physique des HALs, scripts `.rc`, binaires et blobs `.so` dans `BUILD/EXTRACT/<Device>/`.
+     * **Étape 4** : Construction du graphe de dépendances ELF et VNDK (`critical_dependency_graph.json`).
+     * **Étape 5** : Inspection du GSI unpacké et audit des patchs PHH (`phh-on-boot`, `rw-system`, `phh-sepolicy`).
+     * **Étape 6** : Diagnostic de compatibilité vendor et génération du `porting_blueprint.json`.
+
+4. **Consultation des Résultats & Navigation par Onglets** :
+   - **Onglet "Diagnostic GSI & Patchs PHH"** :
+     * Résumé de l'efficacité des patchs PHH vis-à-vis du vendor (Validés, Inefficaces, Manquants).
+     * Alertes rouges/oranges sur les ruptures de compatibilité (ex: Audio HAL 7.1 non pris en charge par le GSI, Binder version mismatch, camera provider bloqué).
+   - **Onglet "Chaîne de Confiance & Sécurité"** :
+     * État AVB, signature, drapeaux de boot, configuration dm-verity et recommandations pour maintenir le boot.
+   - **Onglet "Base de Données & Arborescence"** :
+     * Explorateur interactif du `filesystem_tree.json` et des dépendances critiques.
+   - **Bouton d'Action** : "Ouvrir l'extraction dans Files" ou "Voir les JSONs générés".
+
+### Visual Identity & Theme
+- **Ambiance** : Interface d'ingénierie OS Ubuntu Touch, verre teinté (`Color(0xF00B132B)`), bordures subtiles (`#334155`).
+- **Codes Couleurs** :
+  * Vert émeraude (`#10B981`) : Patchs PHH fonctionnels, signatures intègres.
+  * Orange ambre (`#F59E0B`) : Patchs PHH partiels nécessitant des shims ou overlays.
+  * Rouge corail (`#EF4444`) : Patchs inefficaces / incompatibilité critique de vendor_init.
+  * Cyan néon (`#06B6D4`) : Fichiers extraits et graphe de dépendances.
 
 ---
 
-## 5. Critères de validation et de succès
+## 3. Key Product Decisions & Trade-Offs
 
-1. **Unpack propre sans faux dossiers** :
-   - L'extraction d'une image Android extrait rigoureusement l'arborescence réelle (`bin`, `etc`, `lib`, `framework`, `app`, etc.) sans jamais générer de dossiers artificiels `anim`, `drawable`, `xml` à la racine.
-2. **Métadonnées enregistrées dans `BUILD/data/`** :
-   - Présence effective de `fs_config.txt`, `file_contexts` et `image_info.json`.
-3. **Compatibilité ZArchiver & Outils standards** :
-   - L'image repaquée s'ouvre instantanément dans ZArchiver, affichant l'arborescence complète et le contenu exact de chaque fichier.
-4. **Fidélité 100% en l'absence de modification** :
-   - Un repack immédiat sans modification produit un fichier strictement identique à l'original (vérifié par SHA-256).
+### Décision 1 : Consommation Directe des Projets Décompressés dans `BUILD/UNPACK/`
+- **Approche** : Au lieu de requérir une image brute `.img`, l'analyseur cible directement les dossiers existants dans `BUILD/UNPACK/`. Il inspecte les fichiers déjà extraits (`system/build.prop`, `system/bin/phh-su`, `system/etc/init/`, `system/etc/vintf/`).
+- **Avantage** : Zéro attente de décompression, interopérabilité directe et fluide avec le module `UNPACK_REPACK`.
+
+### Décision 2 : Moteur d'Évaluation Critique des Patchs PHH Treble
+- **Approche** : Analyse statique des scripts init PHH (`init.phh.rc`, `rw-system.sh`) et des règles sepolicy injectées dans le GSI. Le moteur compare ces règles avec les services et HALs déclarés dans le vendor hôte :
+  * Si le vendor utilise un socket ou service propriétaire non couvert par `phh-sepolicy`, une alerte spécifique est émise.
+  * Si le vendor nécessite des extensions Binder (ex: MTK audio / Qualcomm display), le moteur vérifie si les patchs GSI les prennent en charge.
+- **Avantage** : Évite les bootloops mystérieux en explicitant avant même le flash pourquoi un patch PHH générique échouera sur ce téléphone particulier.
+
+### Décision 3 : Fichiers JSON Universels Définis pour le Pipeline OSBuilder
+- **Approche** : Standardisation stricte de 5 fichiers JSON sous `BUILD/EXTRACT/<DeviceName>/` :
+  1. `filesystem_tree.json` (Structure complète avec permissions et contextes SELinux)
+  2. `critical_dependency_graph.json` (Arbre des dépendances binaires ELF et services)
+  3. `boot_security_trust_chain.json` (Chaîne de confiance, AVB, clés et conditions de boot)
+  4. `hardware_database.json` (Périphériques, SoC, capteurs, modules)
+  5. `porting_blueprint.json` (Directives d'injection claires pour les modules futurs)
+
+---
+
+## 4. Technical Architecture & Data Strategy
+
+### Architecture & Component Diagram
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                   OSShell UI                                     │
+│                                                                                  │
+│  ┌──────────────────────┐  ┌──────────────────────────────────────────────────┐  │
+│  │ ModuleRegistry       │  │ ExtractScreen (M3 Jetpack Compose)               │  │
+│  │  - id: "extract"     │  │  - DeviceOverviewCard (Specs & Root)             │  │
+│  │  - title: "Extract"  │  │  - UnpackedGsiSelector (BUILD/UNPACK/ projects)  │  │
+│  │  - icon: "developer" │  │  - PhhPatchAuditView (Effectiveness verdict)     │  │
+│  │                      │  │  - DatabaseExplorer (JSON trees & Security chain)│  │
+│  └───────────┬──────────┘  └──────────────────────────┬───────────────────────┘  │
+└──────────────┼────────────────────────────────────────┼──────────────────────────┘
+               │                                        │
+               ▼                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             Live Extraction Engine                               │
+│                                                                                  │
+│  ┌───────────────────────────┐  ┌───────────────────────┐  ┌──────────────────┐  │
+│  │ LiveHostHarvester         │  │ BinaryDependencyGraph │  │ BootSecurityChain│  │
+│  │  - Partitions walker      │  │  - ELF DT_NEEDED scan │  │  - AVB / vbmeta  │  │
+│  │  - Root & Direct copy     │  │  - Linker namespaces  │  │  - Signatures    │  │
+│  │  - HALs, .rc, .so, blobs  │  │  - Init service trees │  │  - SELinux rules │  │
+│  └───────────┬───────────────┘  └───────────┬───────────┘  └────────┬─────────┘  │
+│              │                              │                       │            │
+│              └───────────────────────┬──────┴───────────────────────┘            │
+│                                      ▼                                           │
+│  ┌────────────────────────────────────────────────────────────────────────────┐  │
+│  │ PhhPatchAuditor & GSI Comparator                                           │  │
+│  │  - Scans BUILD/UNPACK/<Project>/ for PHH scripts & patches                 │  │
+│  │  - Evaluates PHH coverage against host vendor requirements                 │  │
+│  │  - Generates actionable GSI porting diff and recommendations               │  │
+│  └───────────────────────────────────┬────────────────────────────────────────┘  │
+└──────────────────────────────────────┼───────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                   BUILD/EXTRACT/<DeviceName>/ Database Hub                       │
+│                                                                                  │
+│  ├── filesystem_tree.json             (Arborescence complète & contextes SELinux)│
+│  ├── critical_dependency_graph.json   (Arbre de dépendances ELF, so, linker, rc) │
+│  ├── boot_security_trust_chain.json   (Chaîne de confiance, AVB, clés, dm-verity)│
+│  ├── hardware_database.json           (SoC, GPU, Audio, RIL, Caméras, Écran)     │
+│  ├── porting_blueprint.json           (Directives pour futurs outils)            │
+│  ├── hals/                            (Fichiers et binaires de HALs extraits)    │
+│  ├── configs/                         (init.*.rc, audio_policy, media_codecs)    │
+│  ├── overlays/                        (RRO apks et configs d'adaptation)         │
+│  └── blobs/                           (lib, lib64, firmware, modules noyau)      │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Model & State
+
+- **`PhhPatchAuditResult`** :
+  * `hasPhhTreble`: Booléen indiquant la présence de TrebleDroid / PHH dans le GSI décompressé.
+  * `detectedPatches`: Liste des patchs trouvés (`rw-system`, `phh-su`, `sepolicy-inject`, `treble-overlay-*`, etc.).
+  * `unsupportedVendorFeatures`: Liste des spécificités du vendor hôte non gérées par les patchs PHH (ex: HALs caméra propriétaires, daemon audio MTK, socket RIL non déclaré).
+  * `verdict`: Enum (`FULLY_COMPATIBLE`, `NEEDS_ADDITIONAL_PATCHES`, `CRITICAL_INCOMPATIBILITY`).
+  * `remediationPlan`: Liste des actions correctives (shims à greffer, règles sepolicy à ajouter dans `vendor_init`).
+
+- **`BootSecurityTrustChain`** :
+  * `avbVersion`: Version d'Android Verified Boot.
+  * `verifiedBootState`: État du bootloader (`green`, `yellow`, `orange`).
+  * `dmVerityMode`: Statut de la vérification d'intégrité des blocs.
+  * `signKeysType`: Type de signature système (`release-keys`, `test-keys`).
+  * `selinuxStatus`: Mode actif (`Enforcing`, `Permissive`).
+  * `keymasterSecurityLevel`: Niveau d'isolation matérielle (TEE, StrongBox).
+
+- **`FilesystemTreeNode`** :
+  * Chemin relatif, nom, taille, permissions POSIX (ex: `0755`), propriétaire/groupe (`root:shell`), contexte SELinux (`u:object_r:vendor_file:s0`), type (`FILE`, `DIR`, `SYMLINK`), cible de symlink.
+
+- **`CriticalDependencyNode`** :
+  * Nom du binaire ou de la librairie, chemin, architecture (ELF 32/64 bits), liste `needed` (`DT_NEEDED`), namespace linker associé (`default`, `sphal`, `vndk`), services init consommateurs.
+
+### Plan d'Implémentation des Fichiers
+
+1. **`com.example.extract.LiveHostHarvester.kt`** :
+   - Détection des privilèges Root / Shizuku / su.
+   - Moissonnage des propriétés système (`Build`, `getprop`, `ro.product.*`, `ro.vndk.*`).
+   - Parcours complet et extraction des fichiers de partitions disponibles vers `BUILD/EXTRACT/`.
+   - Création de `filesystem_tree.json` et `hardware_database.json`.
+
+2. **`com.example.extract.BinaryDependencyGraphBuilder.kt`** :
+   - Analyseur d'en-têtes ELF pour extraire les dépendances `DT_NEEDED` sans outils externes.
+   - Analyse des fichiers `init.*.rc` pour lier les services aux exécutables et librairies associées.
+   - Exportation de `critical_dependency_graph.json`.
+
+3. **`com.example.extract.BootSecurityChainAuditor.kt`** :
+   - Audit de la chaîne de confiance de boot (props AVB, vbmeta, dm-verity, clés, SELinux).
+   - Exportation de `boot_security_trust_chain.json`.
+
+4. **`com.example.extract.PhhPatchAuditor.kt`** :
+   - Scan des dossiers du projet dans `BUILD/UNPACK/`.
+   - Identification des scripts PHH (`system/bin/phh-*`, `system/etc/init/init.phh.*.rc`, `phh-sepolicy`).
+   - Comparaison croisée avec les spécificités du vendor extrait pour déceler les patchs inefficaces.
+   - Exportation de `porting_blueprint.json` et `gsi_diff_matrix.json`.
+
+5. **`com.example.ui.extract.ExtractScreen.kt`** :
+   - Interface M3 immersive intégrant :
+     * Sélection du projet décompressé dans `BUILD/UNPACK/` via menu déroulant.
+     * Bouton d'action et barre de progression interactive multi-étapes.
+     * Onglets de diagnostic (Patchs PHH, Chaîne de sécurité, Arborescence, JSONs générés).
+     * Boutons pour naviguer directement dans le Gestionnaire de Fichiers vers les extraits.
+
+6. **Intégration `ModuleRegistry.kt` & `OSShell.kt`** :
+   - Enregistrement du module `extract` ("Extract & GSI Diagnostic").
+   - Icône sur le bureau et intégration dans la barre latérale Ubuntu Touch et le gestionnaire de fenêtres.

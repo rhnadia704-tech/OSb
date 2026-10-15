@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
@@ -91,6 +92,7 @@ import com.example.ui.components.TaskSwitcherSheet
 import com.example.ui.components.UbuntuTouchRail
 import com.example.ui.screens.AppThemeMode
 import com.example.ui.screens.ConsoleScreen
+import com.example.ui.screens.ExtractScreen
 import com.example.ui.screens.FileManagerScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.UnpackRepackScreen
@@ -312,6 +314,7 @@ fun OSShell(
                             title = activeModule!!.title,
                             icon = when (activeModule!!.iconType) {
                                 "unpack" -> Icons.Default.Archive
+                                "extract" -> Icons.Default.Memory
                                 "terminal" -> Icons.Default.Terminal
                                 else -> Icons.Default.Public
                             },
@@ -328,6 +331,18 @@ fun OSShell(
                                 UnpackRepackScreen(
                                     initialFile = unpackTargetFile,
                                     initialRepackProject = repackTargetProject,
+                                    onNavigateToFileManager = { dir ->
+                                        fileManagerInitialDir = dir
+                                        activeSidebarScreen = "files"
+                                    },
+                                    onMinimizeTask = {
+                                        activeModule = null
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            "extract" -> {
+                                ExtractScreen(
                                     onNavigateToFileManager = { dir ->
                                         fileManagerInitialDir = dir
                                         activeSidebarScreen = "files"
@@ -841,6 +856,7 @@ private fun DesktopAppLauncherIcon(
     ) {
         val (icon, bgGradient) = when (module.iconType) {
             "unpack" -> Icons.Default.Archive to listOf(Color(0xFF0284C7), Color(0xFF0369A1))
+            "extract" -> Icons.Default.Memory to listOf(Color(0xFF0D9488), Color(0xFF0F766E))
             "terminal" -> Icons.Default.Terminal to listOf(Color(0xFF10B981), Color(0xFF059669))
             "web" -> Icons.Default.Public to listOf(Color(0xFF8B5CF6), Color(0xFF7C3AED))
             else -> Icons.Default.Folder to listOf(Color(0xFF64748B), Color(0xFF475569))

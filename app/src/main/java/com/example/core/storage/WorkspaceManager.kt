@@ -28,6 +28,7 @@ object WorkspaceManager {
 
     fun getUnpackDir(context: Context): File = File(getWorkspaceRoot(context), "UNPACK").apply { mkdirs() }
     fun getPackedDir(context: Context): File = File(getWorkspaceRoot(context), "PACKED").apply { mkdirs() }
+    fun getExtractDir(context: Context): File = File(getWorkspaceRoot(context), "EXTRACT").apply { mkdirs() }
     fun getModulesDir(context: Context): File = File(getWorkspaceRoot(context), "Modules").apply { mkdirs() }
     fun getAppsDir(context: Context): File = File(getWorkspaceRoot(context), "Apps").apply { mkdirs() }
     fun getScriptsDir(context: Context): File = File(getWorkspaceRoot(context), "Scripts").apply { mkdirs() }
@@ -41,6 +42,7 @@ object WorkspaceManager {
         getTelemetryDir(context)
         getUnpackDir(context)
         getPackedDir(context)
+        getExtractDir(context)
         getModulesDir(context)
         getAppsDir(context)
         getScriptsDir(context)
