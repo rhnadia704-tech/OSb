@@ -1,6 +1,6 @@
 {
-  "summary": "Plan for single-pane smart contextual file manager, removal of top status bar for full-bleed OS desktop, bidirectional retractable sidebar handle, and feature-aware smart actions (Unpack img, Repack folder, Run script, Install app, Register GGUF).",
-  "updatedAt": "2026-10-15T02:27:00.329646349Z",
+  "summary": "Plan for real deep EXT4/EROFS file tree extraction with odex/vdex analysis, persistent background TaskManager with live StateFlow, dynamic progress pill in Ubuntu Touch rail, floating mini-player progress card on desktop, and real-time streaming terminal logs.",
+  "updatedAt": "2026-10-15T11:58:50.531188341Z",
   "requestFeedback": true,
   "userFacing": true
 }

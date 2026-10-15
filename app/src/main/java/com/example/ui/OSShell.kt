@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -121,6 +122,7 @@ fun OSShell(
     }
 
     val modules by ModuleRegistry.modules.collectAsState()
+    val activeTask by com.example.core.execution.TaskManager.activeTask.collectAsState()
 
     var openTasks by remember {
         mutableStateOf<List<AppModule>>(
@@ -330,6 +332,9 @@ fun OSShell(
                                         fileManagerInitialDir = dir
                                         activeSidebarScreen = "files"
                                     },
+                                    onMinimizeTask = {
+                                        activeModule = null
+                                    },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -445,6 +450,7 @@ fun OSShell(
                 UbuntuTouchRail(
                     openTasksCount = openTasks.size,
                     activeScreenId = activeSidebarScreen ?: activeModule?.id,
+                    activeTaskState = activeTask,
                     onOpenHome = {
                         activeModule = null
                         activeSidebarScreen = null
@@ -530,6 +536,123 @@ fun OSShell(
                         .width(40.dp)
                         .clickable { isSidebarOpen = false }
                 )
+            }
+        }
+
+        // ================= FLOATING DESKTOP TASK PROGRESS PILL (MINIMIZED STATE) =================
+        AnimatedVisibility(
+            visible = activeTask != null && activeTask!!.isRunning && activeModule?.id != "unpack_repack",
+            enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 20.dp, start = 16.dp, end = 16.dp)
+        ) {
+            val task = activeTask
+            if (task != null) {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xF00F172A)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.95f)
+                        .border(1.5.dp, Color(0xFF38BDF8).copy(alpha = 0.8f), RoundedCornerShape(20.dp))
+                        .clickable {
+                            val unpackMod = modules.firstOrNull { it.id == "unpack_repack" }
+                            if (unpackMod != null) {
+                                if (!openTasks.any { it.id == "unpack_repack" }) openTasks = openTasks + unpackMod
+                                activeModule = unpackMod
+                                activeSidebarScreen = null
+                            }
+                        }
+                        .testTag("floating_task_pill")
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    progress = { task.progress },
+                                    color = Color(0xFF38BDF8),
+                                    trackColor = Color(0x3338BDF8),
+                                    strokeWidth = 3.dp,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = task.title,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = "${(task.progress * 100).toInt()}% • ${String.format(Locale.US, "%.1f", task.currentSpeedMBs)} Mo/s",
+                                        color = Color(0xFF38BDF8),
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    onClick = {
+                                        val unpackMod = modules.firstOrNull { it.id == "unpack_repack" }
+                                        if (unpackMod != null) {
+                                            if (!openTasks.any { it.id == "unpack_repack" }) openTasks = openTasks + unpackMod
+                                            activeModule = unpackMod
+                                            activeSidebarScreen = null
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                    modifier = Modifier.height(32.dp),
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                ) {
+                                    Text("Agrandir", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                IconButton(
+                                    onClick = { com.example.core.execution.TaskManager.cancelCurrentTask() },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Arrêter la tâche",
+                                        tint = Color(0xFFEF4444),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        androidx.compose.material3.LinearProgressIndicator(
+                            progress = { task.progress },
+                            color = Color(0xFF38BDF8),
+                            trackColor = Color(0x33FFFFFF),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(5.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = task.stage,
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
 

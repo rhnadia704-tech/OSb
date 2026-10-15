@@ -17,20 +17,26 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -38,12 +44,14 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -61,6 +69,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.core.execution.ActiveTaskState
+import com.example.core.execution.TaskManager
+import com.example.core.execution.TaskType
 import com.example.core.storage.ProjectMetadata
 import com.example.core.storage.WorkspaceDataHub
 import com.example.core.storage.WorkspaceManager
@@ -77,30 +88,32 @@ fun UnpackRepackScreen(
     initialFile: File? = null,
     initialRepackProject: String? = null,
     onNavigateToFileManager: (File?) -> Unit = {},
+    onMinimizeTask: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var selectedTab by remember { mutableIntStateOf(if (initialRepackProject != null) 1 else 0) }
 
-    // --- Unpack State ---
+    // Persistent global task state from TaskManager
+    val activeTask by TaskManager.activeTask.collectAsState()
+
+    var selectedTab by remember {
+        mutableIntStateOf(
+            if (activeTask?.type == TaskType.REPACK || initialRepackProject != null) 1 else 0
+        )
+    }
+
+    // --- Unpack Local Form State ---
     var selectedFile by remember { mutableStateOf<File?>(initialFile) }
     var analysisResult by remember { mutableStateOf<ImageAnalysisResult?>(null) }
     var projectName by remember {
         mutableStateOf(initialFile?.nameWithoutExtension?.lowercase()?.replace(Regex("[^a-z0-9_]"), "_") ?: "")
     }
-    var isUnpacking by remember { mutableStateOf(false) }
-    var unpackProgress by remember { mutableFloatStateOf(0f) }
-    var unpackStatusMessage by remember { mutableStateOf("") }
 
-    // --- Repack State ---
+    // --- Repack Local Form State ---
     var availableProjects by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedProjectForRepack by remember { mutableStateOf(initialRepackProject ?: "") }
     var repackManifest by remember { mutableStateOf<ProjectMetadata?>(null) }
-    var isRepacking by remember { mutableStateOf(false) }
-    var repackProgress by remember { mutableFloatStateOf(0f) }
-    var repackStatusMessage by remember { mutableStateOf("") }
-    var repackedOutputFile by remember { mutableStateOf<File?>(null) }
 
     fun refreshProjects() {
         val unpackDir = WorkspaceManager.getUnpackDir(context)
@@ -118,6 +131,13 @@ fun UnpackRepackScreen(
         refreshProjects()
         if (initialFile != null && initialFile.exists()) {
             analysisResult = ImageToolchain.analyzeImage(initialFile)
+        }
+    }
+
+    // When an active task starts or exists, keep tab synchronized
+    LaunchedEffect(activeTask?.type) {
+        if (activeTask != null) {
+            selectedTab = if (activeTask?.type == TaskType.REPACK) 1 else 0
         }
     }
 
@@ -152,8 +172,30 @@ fun UnpackRepackScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (selectedTab == 0) {
-            // ================= UNPACK TAB =================
+        // Check if there is an active running task for current tab
+        val isTaskRunning = activeTask != null && activeTask!!.isRunning
+        val isCurrentTabTask = activeTask != null && (
+            (selectedTab == 0 && activeTask!!.type == TaskType.UNPACK) ||
+            (selectedTab == 1 && activeTask!!.type == TaskType.REPACK)
+        )
+
+        if (isCurrentTabTask && activeTask != null) {
+            // ================= ACTIVE TASK PERSISTENT MONITOR CARD =================
+            ActiveTaskMonitor(
+                task = activeTask!!,
+                onCancel = { TaskManager.cancelCurrentTask() },
+                onMinimize = onMinimizeTask,
+                onDismiss = {
+                    TaskManager.clearTask()
+                    refreshProjects()
+                },
+                onOpenExtractedFiles = {
+                    val targetDir = File(WorkspaceManager.getUnpackDir(context), activeTask!!.projectName)
+                    onNavigateToFileManager(targetDir)
+                }
+            )
+        } else if (selectedTab == 0) {
+            // ================= UNPACK FORM TAB =================
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize()
@@ -170,9 +212,9 @@ fun UnpackRepackScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Formats : ext4, erofs, raw, sparse (.img), payload.bin, boot.img, super.img, rom (.zip)",
+                                text = "Prise en charge : ext4, erofs, raw, sparse (.img), payload.bin, boot.img, super.img, rom (.zip)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -194,7 +236,6 @@ fun UnpackRepackScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Button(
                                     onClick = {
-                                        // Quick scan common locations
                                         val root = WorkspaceManager.getWorkspaceRoot(context)
                                         val found = root.walkTopDown().maxDepth(3)
                                             .firstOrNull { it.isFile && (it.name.endsWith(".img") || it.name.endsWith(".bin") || it.name.endsWith(".zip")) }
@@ -285,58 +326,34 @@ fun UnpackRepackScreen(
                             )
                             Spacer(modifier = Modifier.height(16.dp))
 
-                            if (isUnpacking) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    LinearProgressIndicator(
-                                        progress = { unpackProgress },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = unpackStatusMessage,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(12.dp))
-                            }
-
                             Button(
                                 onClick = {
                                     val file = selectedFile
                                     if (file != null && projectName.isNotBlank()) {
-                                        isUnpacking = true
-                                        scope.launch {
-                                            ImageToolchain.executeUnpack(
-                                                context = context,
-                                                inputFile = file,
-                                                projectName = projectName
-                                            ) { prog, msg ->
-                                                unpackProgress = prog
-                                                unpackStatusMessage = msg
-                                            }
-                                            isUnpacking = false
-                                            refreshProjects()
-                                        }
+                                        TaskManager.startUnpack(
+                                            context = context,
+                                            inputFile = file,
+                                            projectName = projectName
+                                        )
                                     }
                                 },
-                                enabled = selectedFile != null && projectName.isNotBlank() && !isUnpacking,
+                                enabled = selectedFile != null && projectName.isNotBlank() && !isTaskRunning,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(48.dp)
+                                    .height(50.dp)
                                     .testTag("btn_start_unpack"),
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
                                 Icon(Icons.Default.PlayArrow, contentDescription = "Démarrer Unpack")
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("LANCER LE DÉBALLAGE", fontWeight = FontWeight.Bold)
+                                Text("LANCER LE DÉBALLAGE PROFOND", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
             }
         } else {
-            // ================= REPACK TAB =================
+            // ================= REPACK FORM TAB =================
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize()
@@ -437,42 +454,19 @@ fun UnpackRepackScreen(
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            if (isRepacking) {
-                                LinearProgressIndicator(
-                                    progress = { repackProgress },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = repackStatusMessage,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                            }
-
                             Button(
                                 onClick = {
                                     if (selectedProjectForRepack.isNotBlank()) {
-                                        isRepacking = true
-                                        repackedOutputFile = null
-                                        scope.launch {
-                                            val result = ImageToolchain.executeRepack(
-                                                context = context,
-                                                projectName = selectedProjectForRepack
-                                            ) { prog, msg ->
-                                                repackProgress = prog
-                                                repackStatusMessage = msg
-                                            }
-                                            repackedOutputFile = result
-                                            isRepacking = false
-                                        }
+                                        TaskManager.startRepack(
+                                            context = context,
+                                            projectName = selectedProjectForRepack
+                                        )
                                     }
                                 },
-                                enabled = selectedProjectForRepack.isNotBlank() && !isRepacking,
+                                enabled = selectedProjectForRepack.isNotBlank() && !isTaskRunning,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(48.dp)
+                                    .height(50.dp)
                                     .testTag("btn_start_repack"),
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
@@ -480,31 +474,198 @@ fun UnpackRepackScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("REPACKER L'IMAGE", fontWeight = FontWeight.Bold)
                             }
-
-                            if (repackedOutputFile != null) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
-                                        .padding(12.dp)
-                                ) {
-                                    Column {
-                                        Text(
-                                            text = "Image repakée avec succès !",
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        Text(
-                                            text = "Fichier : ${repackedOutputFile!!.name} (${formatBytes(repackedOutputFile!!.length())})",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontFamily = FontFamily.Monospace
-                                        )
-                                    }
-                                }
-                            }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveTaskMonitor(
+    task: ActiveTaskState,
+    onCancel: () -> Unit,
+    onMinimize: () -> Unit,
+    onDismiss: () -> Unit,
+    onOpenExtractedFiles: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (task.isRunning) Color(0xFF1E293B) else if (task.isSuccess) Color(0xFF064E3B) else Color(0xFF450A0A)
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp)
+        ) {
+            // Header
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (task.isRunning) {
+                        CircularProgressIndicator(
+                            color = Color(0xFF38BDF8),
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.5.dp
+                        )
+                    } else if (task.isSuccess) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = "Succès", tint = Color(0xFF34D399))
+                    } else {
+                        Icon(Icons.Default.Cancel, contentDescription = "Erreur", tint = Color(0xFFF87171))
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = task.title,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+
+                if (!task.isRunning) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF)),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Text("Nouvelle tâche", fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Percentage & Speed
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "${(task.progress * 100).toInt()}%",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = FontFamily.Monospace
+                )
+                if (task.isRunning && task.currentSpeedMBs > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Speed, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${String.format(Locale.US, "%.1f", task.currentSpeedMBs)} Mo/s",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            LinearProgressIndicator(
+                progress = { task.progress },
+                color = if (task.isSuccess) Color(0xFF34D399) else Color(0xFF38BDF8),
+                trackColor = Color(0x33FFFFFF),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = task.stage,
+                color = Color(0xFFE2E8F0),
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 2
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Live stream terminal logs box
+            Text(
+                text = "Journal d'exécution en direct :",
+                color = Color(0xFF94A3B8),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF0F172A))
+                    .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(10.dp))
+                    .padding(10.dp)
+            ) {
+                LazyColumn(
+                    reverseLayout = true,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(task.recentLogs.asReversed()) { logLine ->
+                        Text(
+                            text = logLine,
+                            color = when {
+                                logLine.contains("[EXT4") || logLine.contains("[DIR") -> Color(0xFF38BDF8)
+                                logLine.contains("APK") || logLine.contains("JAR") -> Color(0xFF34D399)
+                                logLine.contains("VDEX") || logLine.contains("ODEX") -> Color(0xFFFBBF24)
+                                logLine.contains("Erreur") || logLine.contains("Échec") -> Color(0xFFF87171)
+                                else -> Color(0xFF94A3B8)
+                            },
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Bottom action buttons
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (task.isRunning) {
+                    OutlinedButton(
+                        onClick = onMinimize,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Minimiser vers le bureau")
+                    }
+
+                    Button(
+                        onClick = onCancel,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Arrêter la tâche")
+                    }
+                } else if (task.isSuccess && task.type == TaskType.UNPACK) {
+                    Button(
+                        onClick = onOpenExtractedFiles,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Explorer les dossiers extraits (system/)")
                     }
                 }
             }

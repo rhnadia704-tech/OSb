@@ -58,6 +58,7 @@ import com.example.R
 fun UbuntuTouchRail(
     openTasksCount: Int,
     activeScreenId: String?,
+    activeTaskState: com.example.core.execution.ActiveTaskState? = null,
     onOpenHome: () -> Unit,
     onOpenTaskSwitcher: () -> Unit,
     onOpenFileManager: () -> Unit,
@@ -128,21 +129,40 @@ fun UbuntuTouchRail(
                     )
                 }
 
-                // Tâche (Task Switcher button)
+                // Tâche (Task Switcher button with live progress ring)
                 Box(contentAlignment = Alignment.Center) {
+                    if (activeTaskState != null && activeTaskState.isRunning) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            progress = { activeTaskState.progress },
+                            color = Color(0xFF38BDF8),
+                            trackColor = Color(0x3338BDF8),
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.size(50.dp)
+                        )
+                    }
+
                     IconButton(
                         onClick = onOpenTaskSwitcher,
                         modifier = Modifier
                             .size(46.dp)
                             .clip(RoundedCornerShape(14.dp))
                             .background(
-                                if (openTasksCount > 0) Color(0x3338BDF8) else Color.Transparent
+                                if (activeTaskState?.isRunning == true) Color(0x440284C7)
+                                else if (openTasksCount > 0) Color(0x3338BDF8)
+                                else Color.Transparent
                             )
                             .testTag("btn_rail_tasks")
                     ) {
                         BadgedBox(
                             badge = {
-                                if (openTasksCount > 0) {
+                                if (activeTaskState != null && activeTaskState.isRunning) {
+                                    Badge(
+                                        containerColor = Color(0xFF0284C7),
+                                        contentColor = Color.White
+                                    ) {
+                                        Text("${(activeTaskState.progress * 100).toInt()}%", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                } else if (openTasksCount > 0) {
                                     Badge(
                                         containerColor = Color(0xFF0284C7),
                                         contentColor = Color.White
@@ -155,7 +175,7 @@ fun UbuntuTouchRail(
                             Icon(
                                 Icons.Default.Layers,
                                 contentDescription = "Tâche",
-                                tint = if (openTasksCount > 0) Color(0xFF38BDF8) else Color(0xFF94A3B8),
+                                tint = if (activeTaskState?.isRunning == true || openTasksCount > 0) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                                 modifier = Modifier.size(24.dp)
                             )
                         }
