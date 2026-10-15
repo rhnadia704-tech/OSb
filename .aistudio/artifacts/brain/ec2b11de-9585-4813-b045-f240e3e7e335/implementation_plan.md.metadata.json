@@ -1,6 +1,6 @@
 {
-  "summary": "Mise à jour complète du plan d'implémentation pour le module EXTRACT & DIAGNOSTIC GSI. Intègre désormais : \n1) L'analyse directe des projets déjà décompressés dans BUILD/UNPACK/\n2) L'audit intelligent des mécanismes et patchs GSI (phh trebledroid, phh-sepolicy, rw-system, scripts init) pour détecter les inefficacités face au vendor de l'appareil\n3) La génération de la base de données intégrale du téléphone : filesystem_tree.json (arborescence exhaustive et contextes SELinux), critical_dependency_graph.json (graphe ELF DT_NEEDED et dépendances des services init), boot_security_trust_chain.json (AVB/dm-verity, clés de signature, chaîne de boot) et hardware_database.json.",
-  "updatedAt": "2026-10-15T21:27:26.753058898Z",
+  "summary": "Plan d'implémentation complet et relationnel pour la dissection chirurgicale du FOD (Fingerprint On Display) en 6 couches, la décomposition des bibliothèques .so avec démangling C++ et interfaces Binder, l'analyse factuelle approfondie du GSI dans BUILD/Data/IMGXTRACT/<GsiName>/, et la matrice de rapprochement croisé pour évaluer les risques de bootloop et préparer le futur outil de portage.",
+  "updatedAt": "2026-10-15T23:17:14.501948737Z",
   "requestFeedback": true,
   "userFacing": true
 }

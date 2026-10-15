@@ -15,7 +15,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.InputStreamReader
 
 object LiveHostHarvester {
 
@@ -46,13 +45,13 @@ object LiveHostHarvester {
         _progressState.value = ExtractProgressState(
             isRunning = true,
             progress = 0.05f,
-            stage = "Initialisation du moteur d'extraction live...",
-            logs = listOf("Démarrage du moissonneur matériel et système...")
+            stage = "Initialisation de la station d'extraction & dissection...",
+            logs = listOf("Démarrage du moissonneur et dissecteur relationnel...")
         )
 
         try {
-            // STEP 1: Probe Privileges and Device Info
-            log("Étape 1/6 : Diagnostic des privilèges d'accès et propriétés matérielles...")
+            // STEP 1: Privileges & Hardware Database
+            log("Étape 1/7 : Diagnostic des privilèges et spécifications matérielles...")
             val hasRoot = checkRootPrivilege()
             log(if (hasRoot) "✓ Accès SuperUser / Root actif." else "ℹ Mode direct / sandboxed (lecture complète des partitions accessibles).")
 
@@ -63,37 +62,33 @@ object LiveHostHarvester {
             val configsDir = File(projectExtractDir, "configs").apply { mkdirs() }
             val blobsDir = File(projectExtractDir, "blobs").apply { mkdirs() }
             val overlaysDir = File(projectExtractDir, "overlays").apply { mkdirs() }
+            val fodDir = File(projectExtractDir, "fod").apply { mkdirs() }
 
-            _progressState.value = _progressState.value.copy(
-                progress = 0.15f,
-                targetExtractDir = projectExtractDir.absolutePath
-            )
-
-            // Gather Hardware DB
             val hardwareDb = gatherHardwareDatabase(context)
             val hwJsonFile = File(projectExtractDir, "hardware_database.json")
             hwJsonFile.writeText(hardwareDb.toJson().toString(2))
-            log("✓ Spécifications matérielles enregistrées : ${hardwareDb.manufacturer} ${hardwareDb.model} (${hardwareDb.cpuArch}, SoC: ${hardwareDb.socModel})")
+            log("✓ Spécifications enregistrées : ${hardwareDb.manufacturer} ${hardwareDb.model} (Arch: ${hardwareDb.cpuArch}, SoC: ${hardwareDb.socModel})")
 
             _progressState.value = _progressState.value.copy(
-                progress = 0.25f,
-                hardwareDb = hardwareDb
+                progress = 0.15f,
+                hardwareDb = hardwareDb,
+                targetExtractDir = projectExtractDir.absolutePath
             )
 
             // STEP 2: Boot Security & Trust Chain
-            log("Étape 2/6 : Audit de la chaîne de confiance et sécurité de boot...")
+            log("Étape 2/7 : Audit de la chaîne de confiance et intégrité de boot...")
             val securityChain = BootSecurityChainAuditor.audit { log(it) }
             val securityJsonFile = File(projectExtractDir, "boot_security_trust_chain.json")
             BootSecurityChainAuditor.exportToJson(securityChain, securityJsonFile)
             log("✓ Chaîne de confiance enregistrée : AVB=${securityChain.avbVersion}, BootState=${securityChain.verifiedBootState}")
 
             _progressState.value = _progressState.value.copy(
-                progress = 0.40f,
+                progress = 0.28f,
                 securityChain = securityChain
             )
 
-            // STEP 3: Physical Files Extraction (HALs, Configs, Blobs)
-            log("Étape 3/6 : Extraction physique des partitions (/vendor, /system/etc, /apex, /odm)...")
+            // STEP 3: Physical Extraction of Partitions
+            log("Étape 3/7 : Extraction physique des partitions (/vendor, /system/etc, /apex, /odm)...")
             var extractedCount = 0
             var totalExtractedBytes = 0L
 
@@ -108,13 +103,13 @@ object LiveHostHarvester {
 
             sourceCandidateDirs.forEach { srcDir ->
                 if (srcDir.exists() && srcDir.canRead()) {
-                    log("Lecture de ${srcDir.absolutePath}...")
                     srcDir.walkTopDown().maxDepth(4).forEach { file ->
                         if (isCancellationRequested) return@withContext
                         if (file.isFile && file.canRead()) {
                             val name = file.name
                             val ext = file.extension.lowercase()
                             val destDir = when {
+                                name.contains("fingerprint") || name.contains("fod") -> fodDir
                                 ext in listOf("rc", "conf", "prop", "txt") || name.startsWith("init.") || name.contains("fstab") -> configsDir
                                 ext == "xml" || name.contains("manifest") || name.contains("audio_policy") -> halsDir
                                 ext == "apk" -> overlaysDir
@@ -122,7 +117,7 @@ object LiveHostHarvester {
                                 else -> null
                             }
 
-                            if (destDir != null && extractedCount < 800) { // Limit reasonable quota to prevent flash overflow
+                            if (destDir != null && extractedCount < 950) {
                                 try {
                                     val target = File(destDir, name)
                                     if (!target.exists()) {
@@ -137,81 +132,107 @@ object LiveHostHarvester {
                 }
             }
 
-            // Also dump system properties live
-            val propsFile = File(configsDir, "build.prop.dump")
-            val props = dumpSystemProperties()
-            propsFile.writeText(props)
-
+            // Dump live props
+            File(configsDir, "build.prop.dump").writeText(dumpSystemProperties())
             log("✓ Extraction achevée : $extractedCount fichiers clés moissonnés (${totalExtractedBytes / (1024 * 1024)} Mo).")
+
+            val tree = buildFilesystemTree(projectExtractDir)
+            File(projectExtractDir, "filesystem_tree.json").writeText(tree.toJson().toString(2))
+            log("✓ Arborescence et permissions POSIX enregistrées (filesystem_tree.json).")
+
             _progressState.value = _progressState.value.copy(
-                progress = 0.60f,
+                progress = 0.42f,
                 extractedFilesCount = extractedCount,
                 totalSizeExtracted = totalExtractedBytes
             )
 
-            // Build filesystem_tree.json
-            log("Génération de l'arborescence intégrale filesystem_tree.json...")
-            val tree = buildFilesystemTree(projectExtractDir)
-            val treeJsonFile = File(projectExtractDir, "filesystem_tree.json")
-            treeJsonFile.writeText(tree.toJson().toString(2))
-            log("✓ Arborescence et permissions POSIX enregistrées.")
-
-            // STEP 4: Build Critical Dependency Graph
-            log("Étape 4/6 : Parsing ELF et construction du graphe de dépendances...")
-            val dependencyNodes = BinaryDependencyGraphBuilder.buildGraph(projectExtractDir) { log(it) }
-            val depJsonFile = File(projectExtractDir, "critical_dependency_graph.json")
-            BinaryDependencyGraphBuilder.exportToJson(dependencyNodes, depJsonFile)
-            log("✓ Graphe de dépendances enregistré (${dependencyNodes.size} nœuds critiques).")
-
-            _progressState.value = _progressState.value.copy(progress = 0.75f)
-
-            // STEP 5: Audit Selected Unpacked GSI if provided
-            var phhAuditResult: PhhPatchAuditResult? = null
-            if (selectedGsiDir != null && selectedGsiDir.exists() && selectedGsiDir.isDirectory) {
-                log("Étape 5/6 : Audit croisé avec le projet GSI unpacké '${selectedGsiDir.name}'...")
-                val audit = PhhPatchAuditor.auditGsi(
-                    gsiProjectDir = selectedGsiDir,
-                    hostHardwareDb = hardwareDb,
-                    hostSecurity = securityChain,
-                    onLog = { log(it) }
-                )
-                phhAuditResult = audit
-
-                val reportFile = File(projectExtractDir, "gsi_compatibility_report.json")
-                val blueprintFile = File(projectExtractDir, "porting_blueprint.json")
-                val diffMatrixFile = File(projectExtractDir, "gsi_diff_matrix.json")
-
-                PhhPatchAuditor.exportToJson(audit, reportFile, blueprintFile, diffMatrixFile)
-                log("✓ Directives de portage générées : porting_blueprint.json & diff_matrix.")
-            } else {
-                log("Étape 5/6 : Aucun GSI sélectionné dans BUILD/UNPACK/ pour audit croisé (rapport autonome).")
-                // Generate default blueprint based on host
-                val blueprintFile = File(projectExtractDir, "porting_blueprint.json")
-                val bp = JSONObject()
-                bp.put("formatVersion", "1.0")
-                bp.put("generator", "OSbuilder EXTRACT & GSI Diagnostic")
-                bp.put("timestamp", System.currentTimeMillis())
-                bp.put("deviceModel", hardwareDb.model)
-                bp.put("targetArch", hardwareDb.cpuArch)
-                bp.put("supportedAbis", JSONArray(hardwareDb.supportedAbis))
-                bp.put("verdict", "STANDALONE_HOST_DUMP")
-                bp.put("remediationSteps", JSONArray(listOf("Sélectionnez un GSI dans BUILD/UNPACK/ pour obtenir des directives de patchs adaptées.")))
-                blueprintFile.writeText(bp.toString(2))
+            // STEP 4: Advanced Dissection of .SO Libraries (Symbols & Demangling)
+            log("Étape 4/7 : Dissection chirurgicale des bibliothèques .so (symboles, démangling, Binder)...")
+            val soDissections = mutableListOf<SoDissectionNode>()
+            listOf(blobsDir, fodDir).forEach { dir ->
+                dir.listFiles()?.forEach { file ->
+                    if (isCancellationRequested) return@withContext
+                    if (file.isFile && (file.name.endsWith(".so") || file.name.contains(".hardware."))) {
+                        val dissection = ElfSymbolDissector.dissect(file, file.relativeTo(projectExtractDir).path)
+                        soDissections.add(dissection)
+                    }
+                }
             }
+
+            val soJsonFile = File(projectExtractDir, "detailed_so_dissection.json")
+            val soArray = JSONArray()
+            soDissections.forEach { soArray.put(it.toJson()) }
+            soJsonFile.writeText(soArray.toString(2))
+
+            // Build dependency graph
+            val dependencyNodes = BinaryDependencyGraphBuilder.buildGraph(projectExtractDir) { log(it) }
+            BinaryDependencyGraphBuilder.exportToJson(dependencyNodes, File(projectExtractDir, "critical_dependency_graph.json"))
+            log("✓ ${soDissections.size} bibliothèques .so disséquées avec symboles et signatures démanglées.")
+
+            _progressState.value = _progressState.value.copy(
+                progress = 0.58f,
+                soDissections = soDissections
+            )
+
+            // STEP 5: Specialized 6-Layer Relational FOD Dissection
+            log("Étape 5/7 : Dissection relationnelle approfondie du FOD (Fingerprint On Display) en 6 couches...")
+            val fodDb = FodArchitectureDissector.dissect(projectExtractDir, selectedGsiDir) { log(it) }
+            log("✓ Base de données FOD relationnelle établie : ${fodDb.l1Kernel.sensorVendor} (Statut: ${fodDb.l6Verdict.overallStatus}).")
+
+            _progressState.value = _progressState.value.copy(
+                progress = 0.72f,
+                fodDatabase = fodDb
+            )
+
+            // STEP 6: Deep Analysis of GSI in BUILD/Data/IMGXTRACT/<GsiName>/
+            var targetImgXtractDir: File? = null
+            if (selectedGsiDir != null && selectedGsiDir.exists() && selectedGsiDir.isDirectory) {
+                log("Étape 6/7 : Dissection factuelle et indexation du GSI dans Data/IMGXTRACT/${selectedGsiDir.name}...")
+                targetImgXtractDir = GsiDeepAnalyzer.analyzeGsi(context, selectedGsiDir) { log(it) }
+            } else {
+                log("Étape 6/7 : Aucun GSI sélectionné pour extraction IMGXTRACT.")
+            }
+
+            _progressState.value = _progressState.value.copy(
+                progress = 0.85f,
+                targetGsiImgXtractDir = targetImgXtractDir?.absolutePath
+            )
+
+            // STEP 7: Cross-Matching & Bootloop Risk Assessment
+            log("Étape 7/7 : Rapprochement croisé Vendor vs GSI & Évaluation du risque de bootloop...")
+            val bootloopAssessment = VendorGsiCrossMatcher.match(
+                vendorBlobs = soDissections,
+                gsiImgXtractDir = targetImgXtractDir,
+                outputDir = projectExtractDir,
+                onLog = { log(it) }
+            )
+
+            // Run standard PHH audit as well
+            val phhAudit = if (selectedGsiDir != null) {
+                PhhPatchAuditor.auditGsi(selectedGsiDir, hardwareDb, securityChain) { log(it) }.also {
+                    PhhPatchAuditor.exportToJson(
+                        it,
+                        File(projectExtractDir, "gsi_compatibility_report.json"),
+                        File(projectExtractDir, "porting_blueprint.json"),
+                        File(projectExtractDir, "gsi_diff_matrix.json")
+                    )
+                }
+            } else null
 
             _progressState.value = _progressState.value.copy(
                 progress = 1.0f,
                 isRunning = false,
-                stage = "Extraction et diagnostic achevés avec succès !",
-                phhAudit = phhAuditResult
+                stage = "Extraction, dissection chirurgicale et diagnostic achevés !",
+                phhAudit = phhAudit,
+                bootloopAssessment = bootloopAssessment
             )
-            log("=== OPÉRATION TERMINÉE : Base de données prête dans BUILD/EXTRACT/${deviceCleanName}/ ===")
+            log("=== OPÉRATION TERMINÉE : Base relationnelle 100% prête dans BUILD/EXTRACT/${deviceCleanName}/ ===")
 
         } catch (e: Exception) {
             log("Erreur inattendue : ${e.localizedMessage}")
             _progressState.value = _progressState.value.copy(
                 isRunning = false,
-                stage = "Échec de l'extraction : ${e.localizedMessage}"
+                stage = "Échec : ${e.localizedMessage}"
             )
         }
     }
@@ -260,7 +281,6 @@ object LiveHostHarvester {
             partitions.addAll(listOf("system", "vendor", "product", "odm", "boot", "recovery", "userdata"))
         }
 
-        // Camera and Audio HAL descriptors
         val audioHals = mutableListOf<String>()
         val audioFiles = listOf(File("/vendor/etc/audio_policy_configuration.xml"), File("/system/etc/audio_policy.conf"))
         audioFiles.forEach { if (it.exists()) audioHals.add(it.name) }

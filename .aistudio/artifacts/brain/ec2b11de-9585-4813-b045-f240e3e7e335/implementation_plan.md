@@ -1,213 +1,153 @@
-# Module EXTRACT & Diagnostic GSI Live
+# Module EXTRACT & Dissection Relationnelle des .SO, GSI et FOD (Fingerprint On Display)
 
-Système d'extraction en direct du matériel, des HALs, des vendor blobs et des configurations du téléphone hôte, couplé à un moteur d'inspection et de comparaison intelligente avec les projets GSI décompressés dans `BUILD/UNPACK/` pour auditer l'efficacité des patchs PHH/Treble et préparer un portage from scratch 100% compatible.
+Système d'analyse en profondeur, d'extraction enrichie, de décomposition des bibliothèques `.so` et **dissection chirurgicale relationnelle du FOD (Fingerprint On Display) en 6 couches**, couplé à une indexation factuelle du GSI dans `BUILD/Data/IMGXTRACT/<GsiName>/` et une matrice de rapprochement croisé pour garantir un portage sans crash ni bootloop.
+
+---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Décisions architecturales confirmées suite à vos instructions :**
-> - **Source GSI à inspecter** : Sélection directe parmi les projets déjà décompressés dans `BUILD/UNPACK/` via une liste déroulante dynamique. Aucune re-décompression requise.
-> - **Audit d'efficacité des patchs PHH / Treble** : Analyse approfondie des mécanismes du GSI (scripts `phh-on-boot.sh`, `rw-system.sh`, `init.phh.rc`, `phh-sepolicy`, overlays treble) et diagnostic précis de leurs angles morts vis-à-vis du vendor spécifique de l'appareil actuel (audio proprietary, VoLTE/IMS, camera provider, services init propriétaires MTK/Qualcomm/Exynos/Tensor).
-> - **Base de données de référence du téléphone hôte (Interopérabilité future)** :
->   1. `filesystem_tree.json` : Arborescence intégrale de toutes les partitions (`/system`, `/vendor`, `/product`, `/odm`, `/apex`, `/system_ext`) avec permissions Linux, contextes SELinux, liens symboliques et empreintes.
->   2. `critical_dependency_graph.json` : Graphe complet de dépendances (parsing ELF `DT_NEEDED` des `.so`, liaisons `linker`, VNDK namespaces et dépendances de services `init.*.rc`).
->   3. `boot_security_trust_chain.json` : Mécanisme de signature, chaîne de confiance et sécurité de boot (AVB 2.0 / dm-verity, clés release-keys, drapeaux `verifiedbootstate`, `vbmeta`, Keymint/Keystore2/Gatekeeper/TEE).
->   4. `hardware_database.json` : Base de données matérielle détaillée (SoC, GPU, Audio, Caméra, Capteurs, RIL/Modem, Biométrie, Écran/DSI cutouts).
->   5. `porting_blueprint.json` & `gsi_diff_matrix.json` : Directives de portage et d'injection directement exploitables par les prochains outils de build sans ré-explication.
+> **Décisions architecturales confirmées suite à vos réponses :**
+> 1. **Base de Données Relationnelle Complète & Structurée** :
+>    - Tous les éléments extraits et analysés (matériel, noyau, HALs, `.so`, Binder, overlays, services) sont interconnectés par des identifiants uniques (`entity_id`, `layer_id`, `dependencies`, `parent_node`).
+>    - Cette base relationnelle fournit aux futurs outils de portage une vision holistique sans besoin de reconfiguration manuelle.
+>
+> 2. **Investigation Multicouche Exhaustive du FOD (Empreinte sous Écran)** :
+>    - **Couche 1 (Noyau & Matériel)** : Pilotes noyau (`/dev/goodix_fp`, etc.), nœuds `sysfs` d'affichage/toucher (`/sys/class/drm/*/fod_ui`, notification tactile), permissions et contextes SELinux $\rightarrow$ `fod_layer_kernel_hardware.json`.
+>    - **Couche 2 (HALs & Daemons)** : Daemons déclarés dans `init.*.rc`, HALs biométriques (`android.hardware.biometrics.fingerprint*`), extensions propriétaires constructeur (Xiaomi, Samsung, Oplus, Goodix), et extraction physique des fichiers dans `BUILD/EXTRACT/<DeviceName>/fod/` $\rightarrow$ `fod_layer_hal_daemons.json`.
+>    - **Couche 3 (Sécurité & TEE)** : Canaux TrustZone/TEE (`/dev/qseecom`, `/dev/tee0`), fichiers de persistance et calibration (`/mnt/vendor/persist/fingerprint/`) $\rightarrow$ `fod_layer_security_tee.json`.
+>    - **Couche 4 (Géométrie & HBM)** : Coordonnées physiques exactes du capteur (X, Y, rayon), protocole d'illumination High Brightness Mode (faisceau vert/blanc/cyan) $\rightarrow$ `fod_layer_geometry_hbm.json`.
+>    - **Couche 5 (Framework & GSI Treble)** : Support FOD dans SystemUI et biometrics framework du GSI décompressé, overlays RRO (`config_hasFingerprintOnDisplay`, `config_fodCircleX/Y/Size`), scripts et propriétés PHH (`persist.sys.phh.fod.*`) $\rightarrow$ `fod_layer_framework_gsi.json`.
+>    - **Couche 6 (Diagnostic Factuel de Rupture)** : Confrontation directe Vendor hôte vs GSI. Pourquoi le FOD marchera ou échouera (décalage de coordonnées, protocole HBM non relayé, blocage SELinux, version Binder incompatible) avec directives de patch précises $\rightarrow$ `fod_relational_verdict.json`.
+>
+> 3. **Décomposition & Analyse des `.so`** :
+>    - Tables de symboles dynamiques (`.dynsym`, `.symtab`, `.dynstr`) : distinction des symboles exportés (`GLOBAL`/`WEAK`) et importés non résolus (`UND`).
+>    - Démangling C++ (Itanium ABI) : traduction en clair de toutes les signatures de fonctions et classes AOSP (`_ZN...`).
+>    - Cartographie des interfaces Binder AIDL et HIDL.
+>    - Rôle fonctionnel (FOD, Audio, Caméra, HWC, RIL, DRM) et arborescence cible documentée.
+>
+> 4. **Structure Factuelle dans `BUILD/Data/IMGXTRACT/<GsiName>/`** :
+>    - Stockage 100% factuel sans aucune invention ni hallucination : `gsi_manifest.json`, `gsi_exported_symbols.json`, `gsi_binder_services.json`, `gsi_fod_profile.json`.
+>
+> 5. **Matrice de Rapprochement Croisé & Prévention des Bootloops** :
+>    - Identification unitaire des symboles manquants et classification des risques (`CRITICAL_BOOTLOOP`, `FEATURE_DEGRADED`, `SAFE`).
+>    - Génération de `vendor_gsi_cross_matrix.json` et `bootloop_risk_assessment.json`.
 
 ---
 
 ## 1. Overview & Core Concept
 
-### What It Does
-Le module **EXTRACT** accomplit deux missions fondamentales :
-1. **Extraction Live & Base de Données Téléphone** :
-   - Récolte tous les fichiers physiques sans exception des partitions accessibles (`/vendor`, `/odm`, `/system/vendor`, `/apex`, `/system/etc`, configurations de démarrage, binaires et `.so`).
-   - Construit une base de connaissances exhaustive sur le téléphone actuel stockée dans `BUILD/EXTRACT/projects/<DeviceName>/` avec arborescence complète, graphe de dépendances et chaîne de confiance.
-2. **Diagnostic Comparatif GSI Unpacké & Évaluation des Patchs PHH** :
-   - Se connecte directement au dossier décompressé dans `BUILD/UNPACK/` choisi par l'utilisateur.
-   - Inspecte l'implémentation interne du GSI (scripts d'initialisation PHH, politiques SELinux Treble, daemons de compatibilité).
-   - Confronte les exigences du vendor hôte avec les capacités réelles du GSI unpacké afin de signaler avec certitude si les patchs PHH intégrés suffisent ou s'il faut générer des adaptateurs/shims sur-mesure.
-
-### Target Audience & Persona
-Développeurs de systèmes d'exploitation mobiles et créateurs de ROMs customs qui ont besoin d'une vue chirurgicale de leur matériel et d'une automatisation totale de l'intégration Vendor-GSI.
-
-### Key Value
-Fournit un socle de données pérenne et standardisé. Les outils futurs (Builder, Patcher, Flasher) pourront lire directement les fichiers JSON générés sans nécessiter de configuration manuelle.
+### Ce que fait ce module enrichi
+- **Dissection du FOD en 6 Couches Relationnelles** :
+  - Extraction de chaque fichier physique, binaire, script `.rc`, règle sepolicy, pilote et nœud sysfs lié au capteur sous l'écran.
+  - Détermination scientifique et factuelle de la compatibilité du GSI avec le vendor d'origine, en explicitant les causes d'échec exactes.
+- **Dissection des Bibliothèques `.so`** :
+  - Analyse des symboles exportés/importés, démangling C++, détection des relocalisations et des interfaces Binder.
+- **Stockage Factuel dans `IMGXTRACT` & Matrice de Boot** :
+  - Génération d'une base relationnelle complète prête pour les futurs outils de portage.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### Key User Flows
-
-1. **Lancement & Synthèse Hôte** :
-   - Clic sur l'icône **Extract** sur le bureau ou dans le lanceur.
-   - Une carte d'accueil affiche l'identité de l'appareil (Modèle, Chipset/Plateforme, Version Android, SPL, Statut Root/SELinux, ABI).
-
-2. **Sélection du Projet GSI Décompressé (`BUILD/UNPACK/`)** :
-   - Un menu déroulant (`ExposedDropdownMenuBox`) liste instantanément tous les sous-dossiers trouvés dans `BUILD/UNPACK/` (ex: `PixelExperience_arm64`, `LineageOS_21_td`, etc.).
-   - Possibilité de rafraîchir la liste ou d'ouvrir le dossier sélectionné dans le gestionnaire de fichiers.
-
-3. **Lancement de l'Extraction & Analyse Croisée** :
-   - Bouton d'action principal : **"Lancer l'Extraction Complète & Diagnostic GSI"**.
-   - Affichage d'un panneau de statut dynamique avec indicateur d'avancement et terminal en direct :
-     * **Étape 1** : Cartographie arborescente du téléphone hôte & capture des métadonnées (`filesystem_tree.json`).
-     * **Étape 2** : Analyse de la chaîne de confiance et de signature de boot (`boot_security_trust_chain.json`).
-     * **Étape 3** : Extraction physique des HALs, scripts `.rc`, binaires et blobs `.so` dans `BUILD/EXTRACT/<Device>/`.
-     * **Étape 4** : Construction du graphe de dépendances ELF et VNDK (`critical_dependency_graph.json`).
-     * **Étape 5** : Inspection du GSI unpacké et audit des patchs PHH (`phh-on-boot`, `rw-system`, `phh-sepolicy`).
-     * **Étape 6** : Diagnostic de compatibilité vendor et génération du `porting_blueprint.json`.
-
-4. **Consultation des Résultats & Navigation par Onglets** :
-   - **Onglet "Diagnostic GSI & Patchs PHH"** :
-     * Résumé de l'efficacité des patchs PHH vis-à-vis du vendor (Validés, Inefficaces, Manquants).
-     * Alertes rouges/oranges sur les ruptures de compatibilité (ex: Audio HAL 7.1 non pris en charge par le GSI, Binder version mismatch, camera provider bloqué).
-   - **Onglet "Chaîne de Confiance & Sécurité"** :
-     * État AVB, signature, drapeaux de boot, configuration dm-verity et recommandations pour maintenir le boot.
-   - **Onglet "Base de Données & Arborescence"** :
-     * Explorateur interactif du `filesystem_tree.json` et des dépendances critiques.
-   - **Bouton d'Action** : "Ouvrir l'extraction dans Files" ou "Voir les JSONs générés".
-
-### Visual Identity & Theme
-- **Ambiance** : Interface d'ingénierie OS Ubuntu Touch, verre teinté (`Color(0xF00B132B)`), bordures subtiles (`#334155`).
-- **Codes Couleurs** :
-  * Vert émeraude (`#10B981`) : Patchs PHH fonctionnels, signatures intègres.
-  * Orange ambre (`#F59E0B`) : Patchs PHH partiels nécessitant des shims ou overlays.
-  * Rouge corail (`#EF4444`) : Patchs inefficaces / incompatibilité critique de vendor_init.
-  * Cyan néon (`#06B6D4`) : Fichiers extraits et graphe de dépendances.
+### Nouveaux Écrans & Interactions
+1. **Sélecteur GSI & Lancement de l'Analyse Avancée** :
+   - Sélection du projet GSI dans `BUILD/UNPACK/`.
+   - Bouton : **"Extraction Live & Dissection Avancée (.SO, GSI & FOD)"**.
+   - Jauge de progression multi-étapes avec logs en direct.
+2. **Onglet Dédié "Dissection FOD (Empreinte sous Écran)"** :
+   - **Vue en 6 Couches** : Matériel/Noyau, HALs/Daemons, TEE/Calibration, Géométrie HBM, Framework GSI, et Verdict Relationnel.
+   - **Diagnostic de Rupture** : Explications détaillées sur les causes d'échec du FOD sur le GSI sélectionné et directives de correction.
+3. **Onglet "Dissection .SO & Symboles"** :
+   - Moteur de recherche et filtrage par sous-système (FOD/Biométrie, Audio, Caméra, Affichage, RIL, DRM).
+   - Visualisation des signatures C++ démanglées et des interfaces Binder.
+4. **Onglet "Rapprochement GSI & Risques Bootloop"** :
+   - Matrice d'évaluation des risques de bootloop (`bootloop_risk_assessment.json`).
+5. **Onglet "Base JSON & Données Factuelles"** :
+   - Consultation et copie des fichiers JSON générés dans `BUILD/EXTRACT/` et `BUILD/Data/IMGXTRACT/`.
+   - Bouton direct pour ouvrir les dossiers dans le Gestionnaire de Fichiers.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## 3. Architecture Technique & Composants
 
-### Décision 1 : Consommation Directe des Projets Décompressés dans `BUILD/UNPACK/`
-- **Approche** : Au lieu de requérir une image brute `.img`, l'analyseur cible directement les dossiers existants dans `BUILD/UNPACK/`. Il inspecte les fichiers déjà extraits (`system/build.prop`, `system/bin/phh-su`, `system/etc/init/`, `system/etc/vintf/`).
-- **Avantage** : Zéro attente de décompression, interopérabilité directe et fluide avec le module `UNPACK_REPACK`.
-
-### Décision 2 : Moteur d'Évaluation Critique des Patchs PHH Treble
-- **Approche** : Analyse statique des scripts init PHH (`init.phh.rc`, `rw-system.sh`) et des règles sepolicy injectées dans le GSI. Le moteur compare ces règles avec les services et HALs déclarés dans le vendor hôte :
-  * Si le vendor utilise un socket ou service propriétaire non couvert par `phh-sepolicy`, une alerte spécifique est émise.
-  * Si le vendor nécessite des extensions Binder (ex: MTK audio / Qualcomm display), le moteur vérifie si les patchs GSI les prennent en charge.
-- **Avantage** : Évite les bootloops mystérieux en explicitant avant même le flash pourquoi un patch PHH générique échouera sur ce téléphone particulier.
-
-### Décision 3 : Fichiers JSON Universels Définis pour le Pipeline OSBuilder
-- **Approche** : Standardisation stricte de 5 fichiers JSON sous `BUILD/EXTRACT/<DeviceName>/` :
-  1. `filesystem_tree.json` (Structure complète avec permissions et contextes SELinux)
-  2. `critical_dependency_graph.json` (Arbre des dépendances binaires ELF et services)
-  3. `boot_security_trust_chain.json` (Chaîne de confiance, AVB, clés et conditions de boot)
-  4. `hardware_database.json` (Périphériques, SoC, capteurs, modules)
-  5. `porting_blueprint.json` (Directives d'injection claires pour les modules futurs)
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   ExtractScreen UI                                      │
+│  - HostSpecsCard          - GsiSelectorDropdown         - BootloopRiskBanner            │
+│  - Tab: FOD 6 Couches     - Tab: .SO Dissection         - Tab: Cross-Matrix GSI         │
+│  - Tab: Arborescence      - Tab: Base JSON Factuelle                                    │
+└────────────────────────────────────────┬────────────────────────────────────────────────┘
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                           Moteur de Dissection & Analyse                                │
+│                                                                                         │
+│  ┌─────────────────────────┐  ┌──────────────────────────┐  ┌────────────────────────┐  │
+│  │ FodArchitectureDissector│  │ ElfSymbolDissector       │  │ GsiDeepAnalyzer        │  │
+│  │  - 6 Couches FOD        │  │  - Table .dynsym/.symtab │  │  - Décomp. dans        │  │
+│  │  - Extraction physique  │  │  - Relocs .rela.plt      │  │    BUILD/Data/IMGXTRACT │  │
+│  │  - Diagnostic rupture   │  │  - CppDemangler          │  │  - Indexation symboles │  │
+│  │  - Relations & IDs      │  │  - Binder rodata scan    │  │  - Profil FOD GSI      │  │
+│  └────────────┬────────────┘  └────────────┬─────────────┘  └───────────┬────────────┘  │
+│               │                            │                            │               │
+│               └────────────────────────────┼────────────────────────────┘               │
+│                                            ▼                                            │
+│                       ┌────────────────────────────────────────┐                        │
+│                       │ VendorGsiCrossMatcher                  │                        │
+│                       │  - Croisement symboles vendor vs GSI   │                        │
+│                       │  - Évaluation des risques de bootloop  │                        │
+│                       │  - Diagnostic & Causes d'échec FOD     │                        │
+│                       └────────────────────┬───────────────────┘                        │
+└────────────────────────────────────────────┼────────────────────────────────────────────┘
+                                             │
+                                             ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                               Stockage des Données Produites                            │
+│                                                                                         │
+│  /sdcard/BUILD/EXTRACT/<DeviceName>/          /sdcard/BUILD/Data/IMGXTRACT/<GsiName>/   │
+│   ├── hardware_database.json                   ├── gsi_manifest.json                    │
+│   ├── boot_security_trust_chain.json           ├── gsi_exported_symbols.json            │
+│   ├── filesystem_tree.json                     ├── gsi_binder_services.json             │
+│   ├── detailed_so_dissection.json              ├── gsi_fod_profile.json                 │
+│   ├── fod/ (fichiers physiques extraits)       └── gsi_system_libs_index.json           │
+│   ├── fod_relational_database.json                                                      │
+│   ├── fod_compatibility_verdict.json                                                    │
+│   ├── vendor_gsi_cross_matrix.json                                                      │
+│   └── bootloop_risk_assessment.json                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 4. Technical Architecture & Data Strategy
+## 4. Plan de Développement des Fichiers
 
-### Architecture & Component Diagram
+1. **`com.example.core.extract.CppDemangler.kt`** :
+   - Démangleur C++ natif pour décoder les symboles manglés AOSP (`_ZN...`).
 
-```
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│                                   OSShell UI                                     │
-│                                                                                  │
-│  ┌──────────────────────┐  ┌──────────────────────────────────────────────────┐  │
-│  │ ModuleRegistry       │  │ ExtractScreen (M3 Jetpack Compose)               │  │
-│  │  - id: "extract"     │  │  - DeviceOverviewCard (Specs & Root)             │  │
-│  │  - title: "Extract"  │  │  - UnpackedGsiSelector (BUILD/UNPACK/ projects)  │  │
-│  │  - icon: "developer" │  │  - PhhPatchAuditView (Effectiveness verdict)     │  │
-│  │                      │  │  - DatabaseExplorer (JSON trees & Security chain)│  │
-│  └───────────┬──────────┘  └──────────────────────────┬───────────────────────┘  │
-└──────────────┼────────────────────────────────────────┼──────────────────────────┘
-               │                                        │
-               ▼                                        ▼
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│                             Live Extraction Engine                               │
-│                                                                                  │
-│  ┌───────────────────────────┐  ┌───────────────────────┐  ┌──────────────────┐  │
-│  │ LiveHostHarvester         │  │ BinaryDependencyGraph │  │ BootSecurityChain│  │
-│  │  - Partitions walker      │  │  - ELF DT_NEEDED scan │  │  - AVB / vbmeta  │  │
-│  │  - Root & Direct copy     │  │  - Linker namespaces  │  │  - Signatures    │  │
-│  │  - HALs, .rc, .so, blobs  │  │  - Init service trees │  │  - SELinux rules │  │
-│  └───────────┬───────────────┘  └───────────┬───────────┘  └────────┬─────────┘  │
-│              │                              │                       │            │
-│              └───────────────────────┬──────┴───────────────────────┘            │
-│                                      ▼                                           │
-│  ┌────────────────────────────────────────────────────────────────────────────┐  │
-│  │ PhhPatchAuditor & GSI Comparator                                           │  │
-│  │  - Scans BUILD/UNPACK/<Project>/ for PHH scripts & patches                 │  │
-│  │  - Evaluates PHH coverage against host vendor requirements                 │  │
-│  │  - Generates actionable GSI porting diff and recommendations               │  │
-│  └───────────────────────────────────┬────────────────────────────────────────┘  │
-└──────────────────────────────────────┼───────────────────────────────────────────┘
-                                       │
-                                       ▼
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│                   BUILD/EXTRACT/<DeviceName>/ Database Hub                       │
-│                                                                                  │
-│  ├── filesystem_tree.json             (Arborescence complète & contextes SELinux)│
-│  ├── critical_dependency_graph.json   (Arbre de dépendances ELF, so, linker, rc) │
-│  ├── boot_security_trust_chain.json   (Chaîne de confiance, AVB, clés, dm-verity)│
-│  ├── hardware_database.json           (SoC, GPU, Audio, RIL, Caméras, Écran)     │
-│  ├── porting_blueprint.json           (Directives pour futurs outils)            │
-│  ├── hals/                            (Fichiers et binaires de HALs extraits)    │
-│  ├── configs/                         (init.*.rc, audio_policy, media_codecs)    │
-│  ├── overlays/                        (RRO apks et configs d'adaptation)         │
-│  └── blobs/                           (lib, lib64, firmware, modules noyau)      │
-└──────────────────────────────────────────────────────────────────────────────────┘
-```
+2. **`com.example.core.extract.ElfSymbolDissector.kt`** :
+   - Parseur de symboles dynamiques (`.dynsym`, `.dynstr`), relocalisations et détection des tokens Binder AIDL/HIDL.
+   - Classification par rôle fonctionnel et attribution d'emplacement cible.
 
-### Data Model & State
+3. **`com.example.core.extract.FodArchitectureDissector.kt`** :
+   - Dissecteur spécialisé pour le capteur d'empreinte sous écran (FOD).
+   - Scanne les 6 couches (noyau, HALs, TEE, géométrie HBM, framework GSI, diagnostic de rupture).
+   - Copie physique des fichiers clés dans `BUILD/EXTRACT/<DeviceName>/fod/`.
+   - Produit `fod_relational_database.json` et `fod_compatibility_verdict.json`.
 
-- **`PhhPatchAuditResult`** :
-  * `hasPhhTreble`: Booléen indiquant la présence de TrebleDroid / PHH dans le GSI décompressé.
-  * `detectedPatches`: Liste des patchs trouvés (`rw-system`, `phh-su`, `sepolicy-inject`, `treble-overlay-*`, etc.).
-  * `unsupportedVendorFeatures`: Liste des spécificités du vendor hôte non gérées par les patchs PHH (ex: HALs caméra propriétaires, daemon audio MTK, socket RIL non déclaré).
-  * `verdict`: Enum (`FULLY_COMPATIBLE`, `NEEDS_ADDITIONAL_PATCHES`, `CRITICAL_INCOMPATIBILITY`).
-  * `remediationPlan`: Liste des actions correctives (shims à greffer, règles sepolicy à ajouter dans `vendor_init`).
+4. **`com.example.core.extract.GsiDeepAnalyzer.kt`** :
+   - Dissection et indexation factuelle du GSI vers `BUILD/Data/IMGXTRACT/<GsiName>/`.
+   - Extraction des symboles fournis par `/system/lib/` et `/system/lib64/`.
+   - Extraction du profil FOD du GSI (`gsi_fod_profile.json`).
 
-- **`BootSecurityTrustChain`** :
-  * `avbVersion`: Version d'Android Verified Boot.
-  * `verifiedBootState`: État du bootloader (`green`, `yellow`, `orange`).
-  * `dmVerityMode`: Statut de la vérification d'intégrité des blocs.
-  * `signKeysType`: Type de signature système (`release-keys`, `test-keys`).
-  * `selinuxStatus`: Mode actif (`Enforcing`, `Permissive`).
-  * `keymasterSecurityLevel`: Niveau d'isolation matérielle (TEE, StrongBox).
+5. **`com.example.core.extract.VendorGsiCrossMatcher.kt`** :
+   - Rapprochement croisé des symboles et évaluation des risques de bootloop (`bootloop_risk_assessment.json`).
+   - Rapprochement factuel des exigences FOD du vendor avec le GSI.
 
-- **`FilesystemTreeNode`** :
-  * Chemin relatif, nom, taille, permissions POSIX (ex: `0755`), propriétaire/groupe (`root:shell`), contexte SELinux (`u:object_r:vendor_file:s0`), type (`FILE`, `DIR`, `SYMLINK`), cible de symlink.
+6. **Mise à jour de `ExtractModels.kt` & `LiveHostHarvester.kt`** :
+   - Ajout des modèles de données FOD relationnels.
+   - Intégration de la décomposition FOD et des `.so` dans la chaîne de traitement.
 
-- **`CriticalDependencyNode`** :
-  * Nom du binaire ou de la librairie, chemin, architecture (ELF 32/64 bits), liste `needed` (`DT_NEEDED`), namespace linker associé (`default`, `sphal`, `vndk`), services init consommateurs.
-
-### Plan d'Implémentation des Fichiers
-
-1. **`com.example.extract.LiveHostHarvester.kt`** :
-   - Détection des privilèges Root / Shizuku / su.
-   - Moissonnage des propriétés système (`Build`, `getprop`, `ro.product.*`, `ro.vndk.*`).
-   - Parcours complet et extraction des fichiers de partitions disponibles vers `BUILD/EXTRACT/`.
-   - Création de `filesystem_tree.json` et `hardware_database.json`.
-
-2. **`com.example.extract.BinaryDependencyGraphBuilder.kt`** :
-   - Analyseur d'en-têtes ELF pour extraire les dépendances `DT_NEEDED` sans outils externes.
-   - Analyse des fichiers `init.*.rc` pour lier les services aux exécutables et librairies associées.
-   - Exportation de `critical_dependency_graph.json`.
-
-3. **`com.example.extract.BootSecurityChainAuditor.kt`** :
-   - Audit de la chaîne de confiance de boot (props AVB, vbmeta, dm-verity, clés, SELinux).
-   - Exportation de `boot_security_trust_chain.json`.
-
-4. **`com.example.extract.PhhPatchAuditor.kt`** :
-   - Scan des dossiers du projet dans `BUILD/UNPACK/`.
-   - Identification des scripts PHH (`system/bin/phh-*`, `system/etc/init/init.phh.*.rc`, `phh-sepolicy`).
-   - Comparaison croisée avec les spécificités du vendor extrait pour déceler les patchs inefficaces.
-   - Exportation de `porting_blueprint.json` et `gsi_diff_matrix.json`.
-
-5. **`com.example.ui.extract.ExtractScreen.kt`** :
-   - Interface M3 immersive intégrant :
-     * Sélection du projet décompressé dans `BUILD/UNPACK/` via menu déroulant.
-     * Bouton d'action et barre de progression interactive multi-étapes.
-     * Onglets de diagnostic (Patchs PHH, Chaîne de sécurité, Arborescence, JSONs générés).
-     * Boutons pour naviguer directement dans le Gestionnaire de Fichiers vers les extraits.
-
-6. **Intégration `ModuleRegistry.kt` & `OSShell.kt`** :
-   - Enregistrement du module `extract` ("Extract & GSI Diagnostic").
-   - Icône sur le bureau et intégration dans la barre latérale Ubuntu Touch et le gestionnaire de fenêtres.
+7. **Mise à jour de `ExtractScreen.kt`** :
+   - Nouvel onglet **"FOD (Empreinte sous Écran)"** présentant les 6 couches et le diagnostic de rupture.
+   - Onglets de dissection des `.so`, rapprochement croisé et exploration de `Data/IMGXTRACT/`.
