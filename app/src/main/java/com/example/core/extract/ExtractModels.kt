@@ -448,6 +448,10 @@ data class ExtractProgressState(
     val fodDatabase: FodRelationalDatabase? = null,
     val soDissections: List<SoDissectionNode> = emptyList(),
     val bootloopAssessment: BootloopRiskAssessment? = null,
+    val dexDissectionHost: DexDissectionResult? = null,
+    val dexDissectionGsi: DexDissectionResult? = null,
+    val fodChainGraph: FodFullChainGraph? = null,
+    val gsiOverlayConfig: AxmlOverlayConfig? = null,
     val targetExtractDir: String? = null,
     val targetGsiImgXtractDir: String? = null
 )

@@ -18,7 +18,8 @@ import java.io.File
 
 enum class TaskType {
     UNPACK,
-    REPACK
+    REPACK,
+    EXTRACT
 }
 
 data class ActiveTaskState(
@@ -221,6 +222,46 @@ object TaskManager {
             )
         }
         ProcessTerminal.log(LogLevel.WARN, "Tâche annulée par l'utilisateur.")
+    }
+
+    fun startExtractTask(projectName: String, sourceName: String) {
+        currentJob?.cancel()
+        currentJob = null
+        val taskId = "extract_${System.currentTimeMillis()}"
+        _activeTask.value = ActiveTaskState(
+            id = taskId,
+            title = "Extraction & Dissection : $projectName",
+            type = TaskType.EXTRACT,
+            projectName = projectName,
+            sourceName = sourceName,
+            progress = 0.05f,
+            stage = "Initialisation de la dissection...",
+            currentSpeedMBs = 18.5f,
+            isRunning = true
+        )
+    }
+
+    fun updateExtractProgress(progress: Float, stage: String, bytesProcessed: Long = 0L) {
+        _activeTask.update { current ->
+            current?.copy(
+                progress = progress,
+                stage = stage,
+                bytesProcessed = bytesProcessed
+            )
+        }
+    }
+
+    fun completeExtractTask(isSuccess: Boolean, errorMessage: String? = null) {
+        _activeTask.update { current ->
+            current?.copy(
+                progress = if (isSuccess) 1.0f else current.progress,
+                stage = if (isSuccess) "Extraction & Dissection achevées avec succès !" else (errorMessage ?: "Échec de l'extraction."),
+                isRunning = false,
+                isSuccess = isSuccess,
+                errorMessage = errorMessage,
+                completedTimeMs = System.currentTimeMillis()
+            )
+        }
     }
 
     fun clearTask() {

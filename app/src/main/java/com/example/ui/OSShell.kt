@@ -556,7 +556,7 @@ fun OSShell(
 
         // ================= FLOATING DESKTOP TASK PROGRESS PILL (MINIMIZED STATE) =================
         AnimatedVisibility(
-            visible = activeTask != null && activeTask!!.isRunning && activeModule?.id != "unpack_repack",
+            visible = activeTask != null && activeTask!!.isRunning && activeModule?.id != (if (activeTask!!.type == com.example.core.execution.TaskType.EXTRACT) "extract" else "unpack_repack"),
             enter = androidx.compose.animation.slideInVertically(initialOffsetY = { it }) + fadeIn(),
             exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { it }) + fadeOut(),
             modifier = Modifier
@@ -565,6 +565,7 @@ fun OSShell(
         ) {
             val task = activeTask
             if (task != null) {
+                val targetModuleId = if (task.type == com.example.core.execution.TaskType.EXTRACT) "extract" else "unpack_repack"
                 Card(
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xF00F172A)),
@@ -573,10 +574,10 @@ fun OSShell(
                         .fillMaxWidth(0.95f)
                         .border(1.5.dp, Color(0xFF38BDF8).copy(alpha = 0.8f), RoundedCornerShape(20.dp))
                         .clickable {
-                            val unpackMod = modules.firstOrNull { it.id == "unpack_repack" }
-                            if (unpackMod != null) {
-                                if (!openTasks.any { it.id == "unpack_repack" }) openTasks = openTasks + unpackMod
-                                activeModule = unpackMod
+                            val targetMod = modules.firstOrNull { it.id == targetModuleId }
+                            if (targetMod != null) {
+                                if (!openTasks.any { it.id == targetModuleId }) openTasks = openTasks + targetMod
+                                activeModule = targetMod
                                 activeSidebarScreen = null
                             }
                         }
@@ -617,10 +618,10 @@ fun OSShell(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Button(
                                     onClick = {
-                                        val unpackMod = modules.firstOrNull { it.id == "unpack_repack" }
-                                        if (unpackMod != null) {
-                                            if (!openTasks.any { it.id == "unpack_repack" }) openTasks = openTasks + unpackMod
-                                            activeModule = unpackMod
+                                        val targetMod = modules.firstOrNull { it.id == targetModuleId }
+                                        if (targetMod != null) {
+                                            if (!openTasks.any { it.id == targetModuleId }) openTasks = openTasks + targetMod
+                                            activeModule = targetMod
                                             activeSidebarScreen = null
                                         }
                                     },
@@ -671,9 +672,9 @@ fun OSShell(
             }
         }
 
-        // ================= TASK SWITCHER SHEET (iOS / Windows 11) =================
+        // ================= TASK SWITCHER SHEET (iOS Stacked Design) =================
         AnimatedVisibility(
-            visible = showTaskSwitcher,
+            visible = showTaskSwitcher && openTasks.isNotEmpty(),
             enter = fadeIn(),
             exit = fadeOut()
         ) {

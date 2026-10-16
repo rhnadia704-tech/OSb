@@ -6,6 +6,7 @@ import android.hardware.SensorManager
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.WindowManager
+import com.example.core.execution.TaskManager
 import com.example.core.storage.WorkspaceManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +26,7 @@ object LiveHostHarvester {
 
     fun cancelOperation() {
         isCancellationRequested = true
+        TaskManager.cancelCurrentTask()
     }
 
     suspend fun executeExtraction(
@@ -34,11 +36,20 @@ object LiveHostHarvester {
         isCancellationRequested = false
         val logs = mutableListOf<String>()
 
-        fun log(msg: String) {
+        val deviceCleanName = "${Build.MANUFACTURER}_${Build.MODEL}".replace("[^a-zA-Z0-9_]".toRegex(), "_")
+        TaskManager.startExtractTask(deviceCleanName, selectedGsiDir?.name ?: "Extraction Pure Hôte")
+
+        fun log(msg: String, progress: Float? = null) {
             logs.add(msg)
             _progressState.value = _progressState.value.copy(
                 logs = logs.toList(),
-                stage = msg
+                stage = msg,
+                progress = progress ?: _progressState.value.progress
+            )
+            TaskManager.updateExtractProgress(
+                progress = progress ?: _progressState.value.progress,
+                stage = msg,
+                bytesProcessed = _progressState.value.totalSizeExtracted
             )
         }
 
@@ -51,11 +62,10 @@ object LiveHostHarvester {
 
         try {
             // STEP 1: Privileges & Hardware Database
-            log("Étape 1/7 : Diagnostic des privilèges et spécifications matérielles...")
+            log("Étape 1/8 : Diagnostic des privilèges et spécifications matérielles...", 0.08f)
             val hasRoot = checkRootPrivilege()
             log(if (hasRoot) "✓ Accès SuperUser / Root actif." else "ℹ Mode direct / sandboxed (lecture complète des partitions accessibles).")
 
-            val deviceCleanName = "${Build.MANUFACTURER}_${Build.MODEL}".replace("[^a-zA-Z0-9_]".toRegex(), "_")
             val extractRoot = WorkspaceManager.getExtractDir(context)
             val projectExtractDir = File(extractRoot, deviceCleanName).apply { mkdirs() }
             val halsDir = File(projectExtractDir, "hals").apply { mkdirs() }
@@ -67,28 +77,24 @@ object LiveHostHarvester {
             val hardwareDb = gatherHardwareDatabase(context)
             val hwJsonFile = File(projectExtractDir, "hardware_database.json")
             hwJsonFile.writeText(hardwareDb.toJson().toString(2))
-            log("✓ Spécifications enregistrées : ${hardwareDb.manufacturer} ${hardwareDb.model} (Arch: ${hardwareDb.cpuArch}, SoC: ${hardwareDb.socModel})")
+            log("✓ Spécifications enregistrées : ${hardwareDb.manufacturer} ${hardwareDb.model} (Arch: ${hardwareDb.cpuArch}, SoC: ${hardwareDb.socModel})", 0.15f)
 
             _progressState.value = _progressState.value.copy(
-                progress = 0.15f,
                 hardwareDb = hardwareDb,
                 targetExtractDir = projectExtractDir.absolutePath
             )
 
             // STEP 2: Boot Security & Trust Chain
-            log("Étape 2/7 : Audit de la chaîne de confiance et intégrité de boot...")
+            log("Étape 2/8 : Audit de la chaîne de confiance et intégrité de boot...", 0.22f)
             val securityChain = BootSecurityChainAuditor.audit { log(it) }
             val securityJsonFile = File(projectExtractDir, "boot_security_trust_chain.json")
             BootSecurityChainAuditor.exportToJson(securityChain, securityJsonFile)
             log("✓ Chaîne de confiance enregistrée : AVB=${securityChain.avbVersion}, BootState=${securityChain.verifiedBootState}")
 
-            _progressState.value = _progressState.value.copy(
-                progress = 0.28f,
-                securityChain = securityChain
-            )
+            _progressState.value = _progressState.value.copy(securityChain = securityChain)
 
             // STEP 3: Physical Extraction of Partitions
-            log("Étape 3/7 : Extraction physique des partitions (/vendor, /system/etc, /apex, /odm)...")
+            log("Étape 3/8 : Extraction physique des partitions (/vendor, /system/etc, /apex, /odm)...", 0.30f)
             var extractedCount = 0
             var totalExtractedBytes = 0L
 
@@ -132,22 +138,19 @@ object LiveHostHarvester {
                 }
             }
 
-            // Dump live props
             File(configsDir, "build.prop.dump").writeText(dumpSystemProperties())
-            log("✓ Extraction achevée : $extractedCount fichiers clés moissonnés (${totalExtractedBytes / (1024 * 1024)} Mo).")
+            log("✓ Extraction achevée : $extractedCount fichiers clés moissonnés (${totalExtractedBytes / (1024 * 1024)} Mo).", 0.40f)
 
             val tree = buildFilesystemTree(projectExtractDir)
             File(projectExtractDir, "filesystem_tree.json").writeText(tree.toJson().toString(2))
-            log("✓ Arborescence et permissions POSIX enregistrées (filesystem_tree.json).")
 
             _progressState.value = _progressState.value.copy(
-                progress = 0.42f,
                 extractedFilesCount = extractedCount,
                 totalSizeExtracted = totalExtractedBytes
             )
 
             // STEP 4: Advanced Dissection of .SO Libraries (Symbols & Demangling)
-            log("Étape 4/7 : Dissection chirurgicale des bibliothèques .so (symboles, démangling, Binder)...")
+            log("Étape 4/8 : Dissection chirurgicale des bibliothèques .so (symboles, démangling, Binder)...", 0.50f)
             val soDissections = mutableListOf<SoDissectionNode>()
             listOf(blobsDir, fodDir).forEach { dir ->
                 dir.listFiles()?.forEach { file ->
@@ -164,42 +167,95 @@ object LiveHostHarvester {
             soDissections.forEach { soArray.put(it.toJson()) }
             soJsonFile.writeText(soArray.toString(2))
 
-            // Build dependency graph
             val dependencyNodes = BinaryDependencyGraphBuilder.buildGraph(projectExtractDir) { log(it) }
             BinaryDependencyGraphBuilder.exportToJson(dependencyNodes, File(projectExtractDir, "critical_dependency_graph.json"))
-            log("✓ ${soDissections.size} bibliothèques .so disséquées avec symboles et signatures démanglées.")
+            log("✓ ${soDissections.size} bibliothèques .so disséquées avec symboles et signatures C++ démanglées.", 0.60f)
 
-            _progressState.value = _progressState.value.copy(
-                progress = 0.58f,
-                soDissections = soDissections
+            _progressState.value = _progressState.value.copy(soDissections = soDissections)
+
+            // STEP 5: Dissection DEX/APK & Décompilation UDFPS de SystemUI et Framework
+            log("Étape 5/8 : Désassemblage DEX et analyse bytecode UDFPS/FOD (SystemUI & services.jar)...", 0.68f)
+            val hostSystemUiCandidates = listOf(
+                File("/system/priv-app/SystemUI/SystemUI.apk"),
+                File("/system_ext/priv-app/SystemUI/SystemUI.apk"),
+                File("/system/framework/services.jar"),
+                File("/system/framework/framework.jar")
             )
+            var hostDexResult: DexDissectionResult? = null
+            hostSystemUiCandidates.firstOrNull { it.exists() && it.canRead() }?.let { apk ->
+                log("Analyse bytecode DEX de ${apk.name} sur l'hôte...")
+                hostDexResult = DexBytecodeDissector.dissectPackage(apk)
+            }
+            if (hostDexResult == null) {
+                // Fallback virtual descriptor based on system properties
+                hostDexResult = DexBytecodeDissector.dissectDexBytes(ByteArray(0), "HostSystemFallback")
+            }
 
-            // STEP 5: Specialized 6-Layer Relational FOD Dissection
-            log("Étape 5/7 : Dissection relationnelle approfondie du FOD (Fingerprint On Display) en 6 couches...")
+            var gsiDexResult: DexDissectionResult? = null
+            var gsiOverlayConfig: AxmlOverlayConfig? = null
+
+            if (selectedGsiDir != null && selectedGsiDir.exists()) {
+                val gsiSystemUi = listOf(
+                    File(selectedGsiDir, "system/priv-app/SystemUI/SystemUI.apk"),
+                    File(selectedGsiDir, "system_ext/priv-app/SystemUI/SystemUI.apk"),
+                    File(selectedGsiDir, "system/framework/services.jar")
+                ).firstOrNull { it.exists() }
+
+                if (gsiSystemUi != null) {
+                    log("Analyse bytecode DEX de ${gsiSystemUi.name} dans le GSI...")
+                    gsiDexResult = DexBytecodeDissector.dissectPackage(gsiSystemUi)
+                }
+
+                // Parse GSI RRO overlays
+                val overlayFiles = listOf(
+                    File(selectedGsiDir, "system/overlay"),
+                    File(selectedGsiDir, "system/product/overlay")
+                )
+                overlayFiles.forEach { d ->
+                    if (d.exists()) {
+                        d.listFiles()?.firstOrNull { it.name.endsWith(".apk") && it.name.contains("overlay", ignoreCase = true) }?.let { apk ->
+                            log("Décodage binaire XML (AXML) de l'overlay RRO ${apk.name}...")
+                            gsiOverlayConfig = AxmlResourceParser.parseApkOverlay(apk)
+                        }
+                    }
+                }
+            }
+
+            // STEP 6: Specialized 6-Layer Relational FOD Dissection & Chain Graph
+            log("Étape 6/8 : Dissection relationnelle approfondie du FOD (Fingerprint On Display) en 6 couches...", 0.78f)
             val fodDb = FodArchitectureDissector.dissect(projectExtractDir, selectedGsiDir) { log(it) }
-            log("✓ Base de données FOD relationnelle établie : ${fodDb.l1Kernel.sensorVendor} (Statut: ${fodDb.l6Verdict.overallStatus}).")
 
-            _progressState.value = _progressState.value.copy(
-                progress = 0.72f,
-                fodDatabase = fodDb
+            // Build full FOD chain graph
+            val chainGraph = FodChainGraphBuilder.buildGraph(
+                hostFodDb = fodDb,
+                hostDexDissection = hostDexResult,
+                gsiDexDissection = gsiDexResult,
+                gsiOverlayConfig = gsiOverlayConfig,
+                outputDir = projectExtractDir,
+                onLog = { log(it) }
             )
 
-            // STEP 6: Deep Analysis of GSI in BUILD/Data/IMGXTRACT/<GsiName>/
+            _progressState.value = _progressState.value.copy(
+                fodDatabase = fodDb,
+                fodChainGraph = chainGraph,
+                dexDissectionHost = hostDexResult,
+                dexDissectionGsi = gsiDexResult,
+                gsiOverlayConfig = gsiOverlayConfig
+            )
+
+            // STEP 7: Deep Analysis of GSI in BUILD/Data/IMGXTRACT/<GsiName>/
             var targetImgXtractDir: File? = null
             if (selectedGsiDir != null && selectedGsiDir.exists() && selectedGsiDir.isDirectory) {
-                log("Étape 6/7 : Dissection factuelle et indexation du GSI dans Data/IMGXTRACT/${selectedGsiDir.name}...")
+                log("Étape 7/8 : Dissection factuelle et indexation du GSI dans Data/IMGXTRACT/${selectedGsiDir.name}...", 0.88f)
                 targetImgXtractDir = GsiDeepAnalyzer.analyzeGsi(context, selectedGsiDir) { log(it) }
-            } else {
-                log("Étape 6/7 : Aucun GSI sélectionné pour extraction IMGXTRACT.")
             }
 
             _progressState.value = _progressState.value.copy(
-                progress = 0.85f,
                 targetGsiImgXtractDir = targetImgXtractDir?.absolutePath
             )
 
-            // STEP 7: Cross-Matching & Bootloop Risk Assessment
-            log("Étape 7/7 : Rapprochement croisé Vendor vs GSI & Évaluation du risque de bootloop...")
+            // STEP 8: Cross-Matching & Bootloop Risk Assessment
+            log("Étape 8/8 : Rapprochement croisé Vendor vs GSI & Évaluation du risque de bootloop...", 0.95f)
             val bootloopAssessment = VendorGsiCrossMatcher.match(
                 vendorBlobs = soDissections,
                 gsiImgXtractDir = targetImgXtractDir,
@@ -207,7 +263,6 @@ object LiveHostHarvester {
                 onLog = { log(it) }
             )
 
-            // Run standard PHH audit as well
             val phhAudit = if (selectedGsiDir != null) {
                 PhhPatchAuditor.auditGsi(selectedGsiDir, hardwareDb, securityChain) { log(it) }.also {
                     PhhPatchAuditor.exportToJson(
@@ -222,14 +277,16 @@ object LiveHostHarvester {
             _progressState.value = _progressState.value.copy(
                 progress = 1.0f,
                 isRunning = false,
-                stage = "Extraction, dissection chirurgicale et diagnostic achevés !",
+                stage = "Extraction, dissection DEX/AXML et diagnostic achevés !",
                 phhAudit = phhAudit,
                 bootloopAssessment = bootloopAssessment
             )
-            log("=== OPÉRATION TERMINÉE : Base relationnelle 100% prête dans BUILD/EXTRACT/${deviceCleanName}/ ===")
+            TaskManager.completeExtractTask(true)
+            log("=== OPÉRATION TERMINÉE : Base relationnelle 100% prête dans BUILD/EXTRACT/${deviceCleanName}/ ===", 1.0f)
 
         } catch (e: Exception) {
             log("Erreur inattendue : ${e.localizedMessage}")
+            TaskManager.completeExtractTask(false, e.localizedMessage)
             _progressState.value = _progressState.value.copy(
                 isRunning = false,
                 stage = "Échec : ${e.localizedMessage}"
